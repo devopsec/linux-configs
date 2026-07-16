@@ -9,33 +9,17 @@ local last_line_counts = {}
 
 -- Define augroups
 local general_group = augroup("GeneralSettings", { clear = true })
-local gutter_group = augroup("GutterSettings", { clear = true })
 local plugin_group = augroup("PluginSettings", { clear = true })
+local filetype_group = augroup("FiletypeSettings", { clear = true })
 
 local function get_baleia()
   baleia = baleia or vim.g.baleia or require("baleia").setup({ line_starts_at = 3 })
   return baleia
 end
 
--- Automatically check for failures and throw a non-zero exit code if running headlessly
-if #vim.api.nvim_list_uis() == 0 then
-  autocmd("User", {
-    group = plugin_group,
-    pattern = { "LazyInstall", "LazySync" },
-    callback = function()
-      local failed = false
-      for name, plugin in pairs(require("lazy.core.config").plugins) do
-        if plugin._.is_broken then
-          failed = true
-          io.stderr:write("❌ LazyVim plugin compilation/install failed: " .. name .. "\n")
-        end
-      end
-      if failed then
-        vim.cmd("cq") -- Force-quits Neovim immediately with exit code 1
-      end
-    end,
-  })
-end
+-- =================================================================================
+-- General Settings
+-- =================================================================================
 
 -- Make splits auto resize when host resizes
 autocmd("VimResized", {
@@ -89,7 +73,7 @@ autocmd("FileType", {
 -- Force Neovim to redraw gutter when making live changes
 -- Makes changes to statuscolumn/linenumbers/signs instant
 autocmd({ "TextChangedI", "InsertEnter" }, {
-  group = gutter_group,
+  group = general_group,
   pattern = "*",
   callback = function()
     local bufnr = vim.api.nvim_get_current_buf()
@@ -104,18 +88,53 @@ autocmd({ "TextChangedI", "InsertEnter" }, {
   end,
 })
 
+-- Load command line aliases
+autocmd("VimEnter", {
+  group = general_group,
+  callback = function()
+    utils.load_command_line_aliases()
+  end,
+})
+
+-- =================================================================================
+-- Plugin Related Settings
+-- =================================================================================
+
+-- Automatically check for failures and throw a non-zero exit code if running headlessly
+if #vim.api.nvim_list_uis() == 0 then
+  autocmd("User", {
+    group = plugin_group,
+    pattern = { "LazyInstall", "LazySync" },
+    callback = function()
+      local failed = false
+      for name, plugin in pairs(require("lazy.core.config").plugins) do
+        if plugin._.is_broken then
+          failed = true
+          io.stderr:write("❌ LazyVim plugin compilation/install failed: " .. name .. "\n")
+        end
+      end
+      if failed then
+        vim.cmd("cq") -- Force-quits Neovim immediately with exit code 1
+      end
+    end,
+  })
+end
+
 -- Update lualine on focus change
 --autocmd({ "WinClosed", "WinEnter", "BufEnter" }, {
---  group = general_group,
+--  group = plugin_group,
 --  callback = function()
 --    vim.cmd("redrawtabline")
 --    require('lualine').refresh()
 --  end,
 --})
 
--- Filetype specific settings
+-- =================================================================================
+-- Per-FileType Settings
+-- =================================================================================
+
 autocmd("FileType", {
-  group = general_group,
+  group = filetype_group,
   pattern = "gitcommit",
   callback = function()
     vim.opt_local.spell = true
@@ -124,8 +143,8 @@ autocmd("FileType", {
 })
 
 autocmd("FileType", {
-  group = general_group,
-  pattern = "lua",
+  group = filetype_group,
+  pattern = { "json", "json5", "lua" },
   callback = function()
     vim.opt_local.tabstop = 2
     vim.opt_local.shiftwidth = 2
@@ -135,7 +154,7 @@ autocmd("FileType", {
 })
 
 autocmd("FileType", {
-  group = general_group,
+  group = filetype_group,
   pattern = { "make", "kamailio" },
   callback = function()
     vim.opt_local.tabstop = 4
@@ -145,10 +164,9 @@ autocmd("FileType", {
   end,
 })
 
--- External tool integrations
--- Pandoc for doc/docx etc.
+-- Open pandoc for doc/docx etc...
 autocmd("BufReadPost", {
-  group = general_group,
+  group = filetype_group,
   pattern = { "*.doc", "*.docx", "*.rtf", "*.odp", "*.odt" },
   callback = function()
     local path = vim.fn.expand("%:p")
@@ -161,14 +179,14 @@ autocmd("BufReadPost", {
 
 -- Read-only pdf through pdftotext
 autocmd("BufReadPre", {
-  group = general_group,
+  group = filetype_group,
   pattern = "*.pdf",
   callback = function()
     vim.opt_local.readonly = true
   end,
 })
 autocmd("BufReadPost", {
-  group = general_group,
+  group = filetype_group,
   pattern = "*.pdf",
   callback = function()
     local path = vim.fn.expand("%:p")
@@ -184,6 +202,10 @@ autocmd("BufReadPost", {
     end
   end,
 })
+
+-- =================================================================================
+-- User Command Definitions
+-- =================================================================================
 
 -- Render ANSI escape sequences using Baleia
 vim.api.nvim_create_user_command("AnsiOn", function()
@@ -215,11 +237,3 @@ vim.api.nvim_create_user_command("AnsiToggle", function()
     vim.b.ansi_enabled = true
   end
 end, {})
-
--- Load command line aliases
-autocmd("VimEnter", {
-  group = general_group,
-  callback = function()
-    utils.load_command_line_aliases()
-  end,
-})
