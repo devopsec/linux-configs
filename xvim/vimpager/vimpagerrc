@@ -1,0 +1,59 @@
+" ============================================================================
+" Settings for vimpager
+" https://github.com/rkitover/vimpager
+" ============================================================================
+
+" Backspace modification
+set backspace=indent,eol,start
+
+" Statusline, ruler, cmd, filename
+set noshowmode
+set noruler
+set noshowcmd
+set shortmess+=F
+set cmdheight=1
+
+" Disable audio bell on error
+set noerrorbells
+
+" Share the system clipboard w/ vim
+set clipboard+=unnamedplus
+
+" Show matching brackets
+set showmatch
+
+" Do smart case matching on searches
+set smartcase
+
+" Default tab settings
+set tabstop=4
+set shiftwidth=4
+set softtabstop=4
+set expandtab
+
+" Default split created below / right
+set splitbelow
+set splitright
+
+" Enable 24bit True Color
+set termguicolors
+
+" Always show the status bar
+set laststatus=2
+
+" Max characters in a line highlighted
+set synmaxcol=1000
+
+" Timeout for keys
+set timeout
+set timeoutlen=1000
+set ttimeoutlen=0
+
+" Neovim's bundled indent/sh.vim ("case-labels") defaults case labels to one
+" extra shiftwidth of indent relative to `case`/`esac` -- combined with the
+" default "case-statements" indent for the body under each label, that adds
+" up to a double indent. b:sh_indent_options is read live by GetShIndent(),
+" so setting "case-labels" to 0 here keeps labels aligned with `case`/`esac`
+" while the body under each label still gets indented once (relevant if a
+" shell script is paged/edited here).
+autocmd FileType sh,bash let b:sh_indent_options = {'case-labels': 0}

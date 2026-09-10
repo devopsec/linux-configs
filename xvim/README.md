@@ -11,12 +11,16 @@ single installer script.
 | `nvimgit/`   | Neovim | Git-focused config (diff tool, commit editor, pager) |
 | `nvimpager/` | Neovim | Neovim used as a terminal pager (`$PAGER`)           |
 | `vim/`       | Vim    | Lightweight classic Vim config (`~/.vimrc`)          |
+| `vimpager/`  | Vim    | Classic Vim used as a terminal pager (`~/.vimpagerrc`) |
 
 ## Requirements
 
-- `neovim`, `vim`, `git`, `curl`, `ripgrep`, `fd`, `unzip`, `build-essential`
-- A system package manager: `apt-get` (Debian/Ubuntu) or `pacman` (Arch)
-- Target user must have `sudo` privileges for dependency installation
+- `neovim`, `vim`, `git`, `curl`, `unzip`, `build-essential`, `tree-sitter-cli`
+- At least one supported package backend:
+    - system package manager: `apt-get` (Debian/Ubuntu), `pacman` (Arch), or `nix` (NixOS)
+    - `flatpak` (sandboxed apps; `io.neovim.nvim` / `org.vim.Vim`)
+    - `bin` ([marcosnils/bin](https://github.com/marcosnils/bin), generic GitHub-release binary manager)
+- Target user must have `sudo` privileges for system-scope (`-im system`) dependency/config installation
 
 ## Installation
 
@@ -26,11 +30,17 @@ single installer script.
 
 ### Options
 
-| Flag  | Description                                      |
-|-------|--------------------------------------------------|
-| `-h`  | Show help                                        |
-| `-ci` | Clean install — wipe existing config/cache first |
-| `-sd` | Skip dependency installation                     |
+| Flag                | Description                                                                        |
+|---------------------|-------------------------------------------------------------------------------------|
+| `-h`                | Show help                                                                          |
+| `-ci`               | Clean install — wipe existing config/cache first                                  |
+| `-sp`               | Skip package installation                                                         |
+| `-sc`               | Skip editor configuration installation                                            |
+| `-im INSTALL_MODE`  | Where packages are installed: `system`, `user`, `auto` (default: `auto`)          |
+| `-cm CONFIG_MODE`   | Where editor configs are installed: `global`, `users`, `local`, `auto` (default: `auto`) |
+
+`INSTALL_MODE=auto` resolves to `system` when running as root (`EUID=0`), else `user`.
+`CONFIG_MODE=auto` resolves to `users` when the resolved install mode is `system`, else `local`.
 
 ### Example: fresh install
 
@@ -41,7 +51,13 @@ single installer script.
 ### Example: install without touching system packages
 
 ```bash
-./install.sh -sd
+./install.sh -sp
+```
+
+### Example: user-local install (no root, no system packages touched)
+
+```bash
+./install.sh -im user
 ```
 
 ## Post-Install Shell Configuration

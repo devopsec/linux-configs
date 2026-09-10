@@ -36,8 +36,18 @@ vim.opt.shiftwidth = 4      -- Indentation commands use 4 spaces
 vim.opt.softtabstop = 4     -- Backspace and Tab keys treat 4 spaces as a single unit
 vim.opt.expandtab = true    -- Insert spaces when the Tab key is pressed
 
--- Mouse support (disable UI mouse)
-vim.opt.mouse = ""
+-- Enable list mode so indent-blankline.nvim can safely draw its virtual
+-- text arrows over empty, native tab characters instead of fighting them
+vim.opt.list = true
+vim.opt.listchars = {
+  tab = "  ",   -- kept empty so indent-blankline can draw arrows over it
+  trail = "·",
+  nbsp = "␣",
+}
+
+-- UI Mouse Support in normal / insert / help modes
+vim.opt.mouse = "nih"
+vim.opt.mousemodel = "popup_setpos"
 
 -- Line numbers / Gutter settings
 vim.opt.number = true             -- enable line numbers in gutter

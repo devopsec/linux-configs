@@ -32,8 +32,13 @@ vim.opt.shiftwidth = 4      -- Indentation commands use 4 spaces
 vim.opt.softtabstop = 4     -- Backspace and Tab keys treat 4 spaces as a single unit
 vim.opt.expandtab = true    -- Insert spaces when the Tab key is pressed
 
--- Mouse support (user has it disabled)
-vim.opt.mouse = ""
+-- UI Mouse Support in normal / insert / help modes
+vim.opt.mouse = "nih"
+vim.opt.mousemodel = "popup_setpos"
+
+-- Line numbers / Gutter settings
+vim.opt.number = true             -- enable line numbers in gutter
+vim.opt.relativenumber = false    -- fixed position line numbers (do not scroll)
 
 -- Default split created below / right
 vim.opt.splitbelow = true

@@ -1,6 +1,13 @@
+local utils = require("setup.utils")
+
 local autocmd = vim.api.nvim_create_autocmd
 local augroup = vim.api.nvim_create_augroup
 local baleia
+-- baleia.setup() uses this namespace name by default (see baleia.lua's
+-- `either(user_options.name, "BaleiaColors")`); recreating it here (same
+-- name -> same id) lets AnsiOff/AnsiToggle clear the highlights without
+-- needing a "reset" method, which this baleia.nvim version doesn't expose.
+local baleia_namespace = vim.api.nvim_create_namespace("BaleiaColors")
 
 local function get_baleia()
   baleia = baleia or vim.g.baleia or require("baleia").setup({ line_starts_at = 3 })
@@ -9,11 +16,34 @@ end
 
 -- General augroup
 local general_group = augroup("GeneralSettings", { clear = true })
+local plugin_group = augroup("PluginSettings", { clear = true })
 
 -- Make splits auto resize when host resizes
 autocmd("VimResized", {
   group = general_group,
   command = "wincmd =",
+})
+
+-- Set window margin and resize mappings
+autocmd({ "WinEnter", "VimEnter" }, {
+  group = general_group,
+  callback = function()
+    utils.set_win_resize()
+  end,
+})
+
+-- Set cursor line highlighting
+autocmd({ "WinEnter", "VimEnter", "BufWinEnter" }, {
+  group = general_group,
+  callback = function()
+    vim.opt_local.cursorline = true
+  end,
+})
+autocmd({ "WinLeave" }, {
+  group = general_group,
+  callback = function()
+    vim.opt_local.cursorline = false
+  end,
 })
 
 -- Jump to last position when reopening file
@@ -34,6 +64,34 @@ autocmd("FileType", {
     vim.opt_local.formatoptions:remove({ "c", "r", "o" })
   end,
 })
+
+-- Load command line aliases
+autocmd("VimEnter", {
+  group = general_group,
+  callback = function()
+    utils.load_command_line_aliases()
+  end,
+})
+
+-- Automatically check for failures and throw a non-zero exit code if running headlessly
+if #vim.api.nvim_list_uis() == 0 then
+  autocmd("User", {
+    group = plugin_group,
+    pattern = { "LazyInstall", "LazySync" },
+    callback = function()
+      local failed = false
+      for name, plugin in pairs(require("lazy.core.config").plugins) do
+        if plugin._.is_broken then
+          failed = true
+          io.stderr:write("❌ LazyVim plugin compilation/install failed: " .. name .. "\n")
+        end
+      end
+      if failed then
+        vim.cmd("cq") -- Force-quits Neovim immediately with exit code 1
+      end
+    end,
+  })
+end
 
 -- Filetype specific settings
 autocmd("FileType", {
@@ -67,17 +125,37 @@ autocmd("FileType", {
   end,
 })
 
+-- Neovim's bundled indent/sh.vim ("case-labels") defaults case labels to one
+-- extra shiftwidth of indent relative to `case`/`esac` -- combined with the
+-- default "case-statements" indent for the body under each label, that adds
+-- up to a double indent. b:sh_indent_options is read live by GetShIndent(),
+-- so setting "case-labels" to 0 here keeps labels aligned with `case`/`esac`
+-- while the body under each label still gets indented once.
+-- (nvimgit has no treesitter, so this legacy indent script is the only
+-- indenter for sh/bash buffers here -- unlike xvim/nvim's custom
+-- queries/bash/indents.scm override.)
+autocmd("FileType", {
+  group = general_group,
+  pattern = { "sh", "bash" },
+  callback = function()
+    vim.b.sh_indent_options = { ["case-labels"] = 0 }
+  end,
+})
+
 -- Render ANSI escape sequences using Baleia
 vim.api.nvim_create_user_command("AnsiOn", function()
   if vim.bo.buftype == "" then
-    get_baleia():automatically(vim.api.nvim_get_current_buf())
+    -- baleia.setup() returns already-curried functions, not OOP methods --
+    -- must be called with dot syntax (get_baleia().automatically(buf)), not
+    -- colon syntax, which would wrongly pass `baleia` itself as `buffer`
+    get_baleia().automatically(vim.api.nvim_get_current_buf())
     vim.b.ansi_enabled = true
   end
 end, {})
 
 vim.api.nvim_create_user_command("AnsiOff", function()
-  if vim.bo.buftype == "" and baleia then
-    baleia:reset(vim.api.nvim_get_current_buf())
+  if vim.bo.buftype == "" then
+    vim.api.nvim_buf_clear_namespace(vim.api.nvim_get_current_buf(), baleia_namespace, 0, -1)
   end
   vim.b.ansi_enabled = false
 end, {})
@@ -88,12 +166,10 @@ vim.api.nvim_create_user_command("AnsiToggle", function()
   end
 
   if vim.b.ansi_enabled then
-    if baleia then
-      baleia:reset(vim.api.nvim_get_current_buf())
-    end
+    vim.api.nvim_buf_clear_namespace(vim.api.nvim_get_current_buf(), baleia_namespace, 0, -1)
     vim.b.ansi_enabled = false
   else
-    get_baleia():automatically(vim.api.nvim_get_current_buf())
+    get_baleia().automatically(vim.api.nvim_get_current_buf())
     vim.b.ansi_enabled = true
   end
 end, {})

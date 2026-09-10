@@ -84,7 +84,14 @@ return {
   {
     "nvim-tree/nvim-tree.lua",
     version = "*", -- Pin to the latest stable release
-    lazy = false, -- Load on startup
+    cmd = { "NvimTreeToggle", "NvimTreeFocus", "NvimTreeOpen", "NvimTreeFindFile" }, -- Load on demand only
+    init = function()
+      -- preserve the "open with a directory argument" startup flow (`nvim .`)
+      -- even though nvim-tree no longer loads unconditionally at startup
+      if vim.fn.argc(-1) == 1 and vim.fn.isdirectory(vim.fn.argv(0)) == 1 then
+        vim.cmd("NvimTreeOpen " .. vim.fn.argv(0))
+      end
+    end,
     dependencies = { "nvim-tree/nvim-web-devicons" }, -- Recommended for icons
     config = function()
       -- Configure nvim-tree
@@ -96,9 +103,27 @@ return {
   },
   {
     "NvChad/nvim-colorizer.lua",
-    event = { "BufReadPost", "BufNewFile" },
+    ft = { "css", "scss", "less", "html", "lua", "conf", "config", "vim" },
     config = function()
       require("colorizer").setup()
     end,
+  },
+  {
+    "lukas-reineke/indent-blankline.nvim",
+    -- v3 requires the main entry point module to be "ibl"
+    main = "ibl",
+    event = { "BufReadPost", "BufNewFile" },
+    opts = {
+      indent = {
+        -- repeats across the full width of literal TABS
+        tab_char = "→",
+        -- marks the single start of standard SPACE indents
+        char = "→",
+      },
+      scope = {
+        -- disable active context line tracking so all indents look identical
+        enabled = false,
+      },
+    },
   },
 }

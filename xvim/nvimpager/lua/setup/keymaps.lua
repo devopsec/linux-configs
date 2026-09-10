@@ -26,9 +26,10 @@ vim.keymap.set("n", "<C-Down>", "<C-W>j", keyopts)
 vim.keymap.set("n", "<C-PageDown>", ":tabnext<CR>", keyopts)
 vim.keymap.set("n", "<C-PageUp>", ":tabprevious<CR>", keyopts)
 
--- <ctrl>+<t>|<w> to create or close a tab
-vim.keymap.set("n", "<C-t>", ":$tabnew<CR>", keyopts)
-vim.keymap.set("n", "<C-w>", ":tabclose<CR>", keyopts)
+-- NOTE: no <C-t>/<C-w> tab bindings here (unlike xvim/nvim and xvim/nvimgit).
+-- nvimpager is a single-shot pager with no real multi-tab workflow, and <C-t>
+-- must stay free for Neovim's built-in tag-stack pop ("back") so following a
+-- manpage cross-reference via <C-]> (man.lua's tagfunc) can be reversed.
 
 -- x|X to cut text (not using the default register)
 vim.keymap.set("n", "x", '""d', keyopts)

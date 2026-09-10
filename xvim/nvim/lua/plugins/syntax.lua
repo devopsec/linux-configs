@@ -1,52 +1,60 @@
-local completion_keymap = {
-  preset = "none",
-
-  ["<Tab>"] = { "select_and_accept", "fallback" },
-  ["<End>"] = { "select_and_accept", "fallback" },
-
-  ["<Esc>"] = { "cancel", "fallback" },
-  ["<Home>"] = { "cancel", "fallback" },
-
-  ["<Up>"] = { "select_prev", "fallback" },
-  ["<Down>"] = { "select_next", "fallback" },
-
-  ["<PageUp>"] = {
-    function(cmp)
-      return cmp.select_prev({ count = 10 })
-    end,
-    "fallback",
+-- coq_nvim: manual-only completion (never pops up automatically); navigation
+-- keymaps mirroring the old blink.cmp completion_keymap table live in
+-- lua/setup/keymaps.lua, guarded by vim.fn.pumvisible().
+--
+-- NOTE: `auto_start` is a vestigial/inert setting on the current "coq" branch
+-- (kept only for forward-compat) -- the actual switch that suppresses every
+-- non-manual completion trigger is `completion.skip_after = { "" }`, since
+-- every line trivially ends with the empty string, while a manual trigger
+-- (<C-F1>) always bypasses that check. `completion.sticky_manual = false`
+-- ensures a manual trigger doesn't keep auto-completing on further keystrokes.
+--
+-- `clients.snippets.enabled = true` keeps coq's own (non 3rd-party) snippet
+-- source registered, but it starts toggled OFF via the coq_nvim `config`
+-- function below; <C-F2> in lua/setup/keymaps.lua flips it at runtime via
+-- `:COQ source on/off snippets`.
+vim.g.coq_settings = {
+  auto_start = false,
+  keymap = {
+    recommended = false,
+    manual_complete = "<c-f1>",
+    jump_to_mark = "",
+    pre_select = false,
   },
-
-  ["<PageDown>"] = {
-    function(cmp)
-      return cmp.select_next({ count = 10 })
-    end,
-    "fallback",
+  completion = {
+    skip_after = { "" },
+    sticky_manual = false,
+  },
+  clients = {
+    snippets = {
+      enabled = true,
+    },
   },
 }
 
 return {
-  -- TODO: switch to latest once nvim 0.12+ is available in pkg repos
   {
-    "saghen/blink.cmp",
-    branch = 'v1',
-    dependencies = 'rafamadriz/friendly-snippets',
-    opts = {
-      keymap = completion_keymap,
-      cmdline = {
-        enabled = true,
-        keymap = completion_keymap,
-      },
-    },
+    "ms-jpq/coq_nvim",
+    branch = "coq",
+    build = ":COQdeps",
+    -- deferred past startup/UIEnter; loading is triggered the moment the user
+    -- enters insert mode anywhere, or earlier/explicitly via require("coq")
+    -- from setup/lsp.lua so LSP capabilities are still merged correctly
+    event = { "InsertEnter" },
+    config = function()
+      -- start with the (non 3rd-party) snippet completion source disabled;
+      -- <C-F2> toggles it on/off at runtime (see lua/setup/keymaps.lua)
+      local ok, toggle = pcall(require, "coq.lib.producers.toggle")
+      if ok then
+        toggle.set("snippets", false)
+      end
+    end,
   },
   {
     "nvim-treesitter/nvim-treesitter",
     branch = "main",
     commit = vim.fn.has("nvim-0.12") == 0 and "7caec274fd19c12b55902a5b795100d21531391f" or nil,
     version = false, -- last release is way too old and doesn't work on Windows
-    dependencies = {
-      "mason-org/mason.nvim", -- Forces Mason to load first
-    },
     build = function()
       local TS = require("nvim-treesitter")
       if not TS.get_installed then

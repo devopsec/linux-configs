@@ -4,7 +4,6 @@ local lazyrepodir   = lazysharedir .. "/lazy.nvim"
 local lazyrepourl   = "https://github.com/folke/lazy.nvim.git"
 
 -- Bootstrap lazy.nvim
-
 if not (vim.uv or vim.loop).fs_stat(lazyrepodir) then
   local out = vim.fn.system({
       "git", "clone", "--filter=blob:none", "--branch=stable", lazyrepourl, lazyrepodir
@@ -51,10 +50,31 @@ if not vim.g.have_nerd_font then
   }
 end
 
+-- LazyVim's own startup import-order check (lazyvim/config/init.lua) looks
+-- for a module literally named "lazyvim.plugins" (the full wildcard) as the
+-- very first import; since we intentionally import only curated submodules
+-- (lazyvim.plugins.init/.coding/.editor) instead of that wildcard -- for
+-- performance, see lua/plugins/lsp.lua/syntax.lua -- that check would always
+-- (falsely) warn "import order is incorrect" no matter how these are
+-- ordered, so it's disabled here.
+vim.g.lazyvim_check_order = false
+
+-- TODO:  implement a better solution for plugin updates that integrates with existing pkg/app mgrs.
+
 require("lazy").setup({
   spec = {
-    -- add LazyVim and import its plugins
-    { "LazyVim/LazyVim", import = "lazyvim.plugins" },
+    -- add LazyVim, but only import the specific modules xvim actually
+    -- benefits from instead of the full "lazyvim.plugins" wildcard (which
+    -- also pulls in nvim-lspconfig/mason/mason-lspconfig, and auto-enables
+    -- default LazyVim "extras" such as the blink.cmp completion extra --
+    -- none of which are wanted now that LSP is native and coq_nvim is used).
+    -- Import order below still follows LazyVim's convention (its own
+    -- modules first, then any lazyvim.plugins.extras.*, then our own
+    -- "plugins") for consistency, even though the order-check above can't
+    -- validate it given the non-wildcard import.
+    { "LazyVim/LazyVim", import = "lazyvim.plugins.init" },
+    { import = "lazyvim.plugins.coding" },
+    { import = "lazyvim.plugins.editor" },
     -- import/override with your plugins
     { import = "plugins" },
   },
@@ -73,7 +93,7 @@ require("lazy").setup({
   },
   checker = {
     -- check for plugin updates periodically
-    enabled = true,
+    enabled = false,
     -- notify on update
     notify = true,
   },
