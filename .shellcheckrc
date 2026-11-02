@@ -1,0 +1,16 @@
+# Ref: https://github.com/koalaman/shellcheck/blob/master/shellcheck.1.md#rc-files
+source-path=SCRIPTDIR
+
+# Always allow ShellCheck to open any sourced files
+external-sources=true
+
+# Whether shellcheck will follow sources for references
+extended-analysis=true
+
+# Enable some optional inspections:
+enable=check-unassigned-uppercase
+
+# Disable a few inspections:
+# 1. improve performance in IDEs
+# 2. ignore warnings we do not care about
+disable=SC2155,SC1090,SC2164,SC2181,SC2016,SC2029,SC2087

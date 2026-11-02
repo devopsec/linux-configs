@@ -1,0 +1,33 @@
+#=======================================
+# Project Exclusions
+#=======================================
+
+#=======================================
+# Project Inclusions
+#=======================================
+
+# local agent settings
+!/.aiassistant/
+!/.agents/
+!/.amazonq/
+!/.augment/
+!/.claude/
+!/.codeium/
+!/.codex/
+!/.commonai/
+!/.cline/
+!/.continue/
+!/.copilot/
+!/.cursor/
+!/.devin/
+!/.gemini/
+!/.junie/
+!/.kilocode/
+!/.opencode/
+!/.roo/
+!/.tabnine/
+!/.trae/
+!/.windsurf/
+
+# local audit data
+!/.audits/
