@@ -1,0 +1,8 @@
+[tooling]
+iac = "terraform" # Use "tofu" when the workspace standard is OpenTofu.
+cloud_cli = "aws"
+
+[database]
+default_engine = "postgres"
+private_access = true
+deletion_protection = true

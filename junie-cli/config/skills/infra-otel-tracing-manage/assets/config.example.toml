@@ -1,0 +1,5 @@
+# Optional preferences for OpenTelemetry tasks.
+preferred_collector = "ops-agent" # "ops-agent" or "otelcol-contrib"
+trace_destination = "cloud-trace"
+head_sampling_ratio = 0.1
+require_tls_for_remote_otlp = true

@@ -1,0 +1,9 @@
+[tooling]
+iac = "terraform" # Use "tofu" when the workspace standard is OpenTofu.
+cloud_cli = "az"
+module_style = "avm"
+
+[database]
+default_postgresql_service = "flexible-server"
+private_access = true
+deletion_protection = true

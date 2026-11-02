@@ -1,0 +1,18 @@
+checked = "2026-10-28"
+default_engine = "opengrep"
+pr_scan_mode = "baseline-diff"
+default_branch_mode = "full"
+metrics = "off"
+
+[tools.opengrep]
+enabled = true
+version = "1.33.0"
+
+[tools.codeql]
+enabled = false
+version = "2.27.3"
+mode = "full-or-reviewed-sarif-baseline"
+
+[rules]
+source = "reviewed-local-rules-or-fixed-ruleset"
+require_positive_and_negative_fixtures = true

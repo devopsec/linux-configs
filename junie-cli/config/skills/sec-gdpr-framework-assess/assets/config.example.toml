@@ -1,0 +1,16 @@
+# Copy to ~/.junie/custom/configs/compliance/gdpr.toml and replace placeholders.
+[assessment]
+framework = "GDPR"
+baseline = "Regulation (EU) 2016/679"
+baseline_checked = "2026-10-28"
+jurisdictions = []
+system_boundary = []
+assessment_period = "<define-with-owner>"
+
+[privacy]
+controller_processor_roles = []
+data_categories = []
+processing_purposes = []
+lawful_basis_decisions = "<confirm-with-privacy-lead>"
+transfer_scope = []
+retention_policy = "<approved-policy-reference>"

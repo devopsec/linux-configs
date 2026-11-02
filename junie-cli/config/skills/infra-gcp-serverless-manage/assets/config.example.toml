@@ -1,0 +1,3 @@
+preferred_execution_model = "cloud_run_service"
+default_ingress = "internal"
+require_authentication = true

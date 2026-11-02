@@ -1,0 +1,9 @@
+[image_scan]
+tool = "trivy"
+severity = ["HIGH", "CRITICAL"]
+fail_on_findings = true
+
+[runtime]
+require_non_root = true
+require_read_only_rootfs = true
+drop_capabilities = ["ALL"]

@@ -1,0 +1,8 @@
+[tooling]
+iac = "terraform" # Use "tofu" when the workspace standard is OpenTofu.
+cloud_cli = "aws"
+large_transfer_tool = "datasync"
+
+[storage]
+block_public_access = true
+require_confirmation_for_bulk_delete = true

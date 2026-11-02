@@ -1,0 +1,16 @@
+checked = "2026-10-28"
+fail_on = ["critical"]
+include_unfixed_in_report = true
+scan_config = true
+
+[tools.trivy]
+enabled = true
+version = "0.76.1"
+image_digest_required = true
+
+[tools.grype]
+enabled = false
+version = "0.121.0"
+
+[suppressions]
+require_vulnerability_id_owner_reason_expiry = true

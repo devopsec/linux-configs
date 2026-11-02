@@ -1,0 +1,7 @@
+[tooling]
+iac = "terraform" # Use "tofu" when the workspace standard is OpenTofu.
+cloud_cli = "aws"
+deployment_tool = "terraform" # Use "sam" for SAM-owned application deployments.
+
+[runtime]
+production_preview_runtimes = false

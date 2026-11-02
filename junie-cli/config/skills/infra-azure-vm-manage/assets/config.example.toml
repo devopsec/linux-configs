@@ -1,0 +1,8 @@
+[tooling]
+iac = "terraform" # Use "tofu" when the workspace standard is OpenTofu.
+cloud_cli = "az"
+module_style = "avm"
+
+[safety]
+public_ip_default = false
+require_confirmation_for_delete = true

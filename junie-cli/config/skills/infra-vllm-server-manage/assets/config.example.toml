@@ -1,0 +1,9 @@
+[defaults]
+version = "v0.32.0"
+versions_checked = "2026-10-28"
+python_version = "<approved-python-patch>"
+bind_address = "localhost:8000"
+model_id = "<approved-model-id>"
+model_revision = "<immutable-commit-sha>"
+gpu_memory_utilization = 0.9
+max_model_len = 8192

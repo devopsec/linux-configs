@@ -1,0 +1,7 @@
+[defaults]
+protocol = "otlp-grpc"
+remote_transport_tls = true
+metrics_backend = "prometheus"
+trace_backend = "<approved-private-backend>"
+content_capture = false
+redact_before_export = true

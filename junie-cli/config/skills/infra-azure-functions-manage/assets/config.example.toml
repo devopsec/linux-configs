@@ -1,0 +1,10 @@
+[tooling]
+iac = "terraform" # Use "tofu" when the workspace standard is OpenTofu.
+cloud_cli = "az"
+core_tools = "4.16.0"
+
+[runtime]
+functions_host = "4"
+python = "3.13"
+plan = "flex-consumption"
+production_preview_runtimes = false

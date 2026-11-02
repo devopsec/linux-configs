@@ -1,0 +1,8 @@
+[defaults]
+vector_store = "pgvector"
+chunk_size_tokens = 400
+chunk_overlap_tokens = 60
+candidate_limit = 40
+reranked_result_limit = 5
+tenant_filter_required = true
+source_citations_required = true

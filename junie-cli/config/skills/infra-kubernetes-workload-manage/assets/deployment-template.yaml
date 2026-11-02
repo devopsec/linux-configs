@@ -1,0 +1,150 @@
+# Hardened Deployment skeleton (adapted from upstream kubernetes-ops asset).
+# Replace <APP_NAME>, <NAMESPACE>, <IMAGE>, <DIGEST>. Passes PSA "restricted".
+# Replicas, resource sizes, probe paths, and disruption settings are illustrative; set them from app SLOs and measurements before use.
+# Secrets: <APP_NAME>-secrets must be created by External Secrets / Secret Manager CSI, never committed.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: <APP_NAME>
+  namespace: <NAMESPACE>
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: <APP_NAME>
+  namespace: <NAMESPACE>
+  labels:
+    app.kubernetes.io/name: <APP_NAME>
+spec:
+  replicas: 3
+  revisionHistoryLimit: 5            # rollback path; do not prune old ReplicaSets
+  progressDeadlineSeconds: 600
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: <APP_NAME>
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: <APP_NAME>
+    spec:
+      serviceAccountName: <APP_NAME>
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: <APP_NAME>
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: <APP_NAME>
+          image: <IMAGE>@sha256:<DIGEST>   # deploy by digest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          envFrom:
+            - configMapRef:
+                name: <APP_NAME>-config
+            - secretRef:
+                name: <APP_NAME>-secrets
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          startupProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 5
+            failureThreshold: 30
+          readinessProbe:
+            httpGet: { path: /ready, port: http }
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet: { path: /health, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              sleep: { seconds: 5 }      # k8s >= 1.30; else exec sleep
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: <APP_NAME>
+  namespace: <NAMESPACE>
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: <APP_NAME>
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: <APP_NAME>
+  namespace: <NAMESPACE>
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: <APP_NAME>
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: <APP_NAME>
+  namespace: <NAMESPACE>
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: <APP_NAME>

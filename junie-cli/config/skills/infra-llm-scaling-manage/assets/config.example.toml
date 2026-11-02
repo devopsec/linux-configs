@@ -1,0 +1,9 @@
+[defaults]
+keda_version = "v2.21.0"
+versions_checked = "2026-10-28"
+online_signal = "prometheus_queue_depth"
+online_min_replicas = 1
+online_max_replicas = 4
+batch_min_replicas = 0
+batch_max_replicas = 20
+spot_for_online_baseline = false

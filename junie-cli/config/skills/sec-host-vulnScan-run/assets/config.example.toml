@@ -1,0 +1,9 @@
+[scan]
+nmap_version = "7.992"
+nuclei_version = "3.11.1"
+nuclei_templates_version = "10.5.0"
+versions_checked = "2026-10-28"
+max_rate_per_second = 5
+max_concurrency = 2
+allow_code_templates = false
+allow_exploit_checks = false

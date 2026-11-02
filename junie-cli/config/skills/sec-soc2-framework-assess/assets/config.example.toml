@@ -1,0 +1,13 @@
+# Copy to ~/.junie/custom/configs/compliance/soc2.toml and replace placeholders.
+[assessment]
+framework = "SOC 2"
+baseline = "2017 AICPA Trust Services Criteria with revised points of focus (2022)"
+baseline_checked = "2026-10-28"
+report_type = "<confirm-type-I-or-type-II>"
+criteria = []
+system_boundary = []
+examination_period = "<set-by-owner-and-auditor>"
+
+[review]
+auditor_instructions = "<approved-reference>"
+evidence_repository = "<approved-restricted-location>"

@@ -1,0 +1,4 @@
+# Optional log-backend preferences. Retention values come from service policy.
+preferred_backend = "existing-elastic" # or "cloud-logging", "loki"
+retention_policy = "service-owner-input"
+scrub_sensitive_fields = true

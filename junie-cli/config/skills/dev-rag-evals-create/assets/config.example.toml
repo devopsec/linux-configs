@@ -1,0 +1,5 @@
+[evaluation]
+engine = "ragas==0.4.3"
+engine_checked = "2026-10-28"
+judge_model = "<pinned-judge-model-id>"
+metrics = ["recall@k", "mrr", "faithfulness", "answer_relevancy"]

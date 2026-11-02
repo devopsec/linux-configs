@@ -1,0 +1,13 @@
+# Copy to ~/.junie/custom/configs/compliance/pciDss.toml and replace placeholders.
+[assessment]
+framework = "PCI DSS"
+baseline = "PCI DSS v4.0.1"
+baseline_checked = "2026-10-28"
+assessment_instrument = "<confirm-with-QSA-or-acquirer>"
+cde_boundary = []
+payment_flows = []
+assessment_period = "<set-by-assessor>"
+
+[review]
+qsa_or_assessor = "<role-or-approved-contact-reference>"
+third_party_services = []

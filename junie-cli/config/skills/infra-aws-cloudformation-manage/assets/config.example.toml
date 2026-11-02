@@ -1,0 +1,7 @@
+[tooling]
+template_linter = "cfn-lint"
+cloud_cli = "aws"
+
+[deployment]
+default_change_set = true
+require_confirmation_for_execute = true

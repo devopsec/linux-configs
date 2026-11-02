@@ -1,0 +1,8 @@
+[tooling]
+iac = "terraform" # Use "tofu" when the workspace standard is OpenTofu.
+cloud_cli = "aws"
+path_analyzer = "reachability-analyzer"
+
+[network]
+public_ingress_default = false
+require_user_supplied_cidrs_and_ports = true

@@ -1,0 +1,9 @@
+[versioning]
+tool = "git-cliff"
+tool_version = "2.14.2"
+commit_convention = "conventional-commits"
+tag_prefix = "v"
+
+[release]
+approval = "human-required"
+tag_mutability = "immutable"

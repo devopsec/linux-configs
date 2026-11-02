@@ -1,0 +1,12 @@
+checked = "2026-10-28"
+severity = "warning"
+file_discovery = "tracked-files-and-shebangs"
+include_untracked = false
+
+[tool]
+name = "shellcheck"
+version = "0.11.0"
+
+[report]
+format = "gcc"
+private_output = true

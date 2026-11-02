@@ -1,0 +1,6 @@
+[tools]
+unit_runner = "pytest"
+provider_suite = "promptfoo==0.125.1"
+provider_suite_checked = "2026-10-28"
+repeats = 3
+judge_model = "<pinned-judge-model-id>"

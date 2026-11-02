@@ -1,0 +1,54 @@
+checked = "2026-10-28"
+python_roots = ["<python-source-root>"]
+diff_aware_pr_checks = true
+full_default_branch_scan = true
+
+[tools.pycharm_inspections]
+enabled = true
+version_source = "installed-IDE-profile"
+
+[tools.bandit]
+enabled = true
+version = "1.9.4"
+
+[tools.codeql]
+enabled = false
+version = "2.27.3"
+
+[tools.opengrep]
+enabled = false
+version = "1.33.0"
+
+[tools.ruff]
+enabled = true
+version = "0.17.2"
+
+[tools.pylint]
+enabled = false
+version = "4.1.3"
+
+[tools.mypy]
+enabled = false
+version_source = "exact version in uv.lock"
+
+[tools.pyre_pysa]
+enabled = false
+version_source = "exact version in approved toolchain lock"
+
+[tools.pyright]
+enabled = false
+version_source = "exact version in approved toolchain lock"
+
+[tools.xenon]
+enabled = false
+version_source = "exact version in approved toolchain lock"
+
+[tools.pip_audit]
+enabled = false
+version = "2.10.1"
+delegated_skill = "sec-python-dependency-scan"
+
+[tools.gitleaks]
+enabled = false
+version = "8.30.1"
+delegated_skill = "sec-git-secrets-scan"

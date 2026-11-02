@@ -1,0 +1,5 @@
+# Optional preferences for eBPF investigations.
+preferred_tool = "bpftrace" # "bpftrace", "bcc", or "tetragon"
+max_duration_seconds = 30
+production_requires_approval = true
+capture_payloads = false

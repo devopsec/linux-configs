@@ -1,0 +1,9 @@
+[defaults]
+orchestrator = "prefect"
+prefect_version = "3.9.0"
+airflow_version = "3.3.2"
+dagster_version = "1.13.27"
+versions_checked = "2026-10-28"
+task_retries = 2
+task_concurrency = 4
+evaluation_gate_required = true

@@ -1,0 +1,8 @@
+[tooling]
+iac = "terraform" # Use "tofu" when the workspace standard is OpenTofu.
+cloud_cli = "aws"
+policy_validator = "access-analyzer"
+
+[safety]
+require_privilege_change_confirmation = true
+forbid_long_lived_workload_keys = true

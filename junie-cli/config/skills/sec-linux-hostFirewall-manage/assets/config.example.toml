@@ -1,0 +1,5 @@
+[host_firewall]
+manager = "auto"
+sensitive_ports = [22, 2223, 3306, 5000, 5432, 6379, 8080, 9090]
+allow_mutations_without_approval = false
+require_remote_rollback = true

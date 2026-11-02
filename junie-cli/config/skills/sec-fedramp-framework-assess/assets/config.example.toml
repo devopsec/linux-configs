@@ -1,0 +1,15 @@
+# Copy to ~/.junie/custom/configs/compliance/fedramp.toml and replace placeholders.
+[assessment]
+framework = "FedRAMP"
+baseline = "<confirm-authorization-path-and-baseline>"
+reference_catalog = "NIST SP 800-53 Rev. 5.2.0"
+baseline_checked = "2026-10-28"
+authorization_path = "<confirm-with-agency-or-AO>"
+agency = "<agency>"
+impact_level = "<approved-impact-level>"
+system_boundary = []
+assessment_period = "<set-by-AO-or-3PAO>"
+
+[governance]
+ao_or_3pao_instructions = "<approved-reference>"
+ssp_reference = "<approved-ssp-location>"

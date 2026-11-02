@@ -1,0 +1,8 @@
+[defaults]
+version = "v0.21.0"
+versions_checked = "2026-10-28"
+deployment_mode = "RawDeployment"
+namespace = "<namespace>"
+model_storage_uri = "gs://<private-bucket>/models/<model>/<revision>"
+min_replicas = 1
+max_replicas = 4

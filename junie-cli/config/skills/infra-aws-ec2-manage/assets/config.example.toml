@@ -1,0 +1,8 @@
+[tooling]
+iac = "terraform" # Use "tofu" when the workspace standard is OpenTofu.
+cloud_cli = "aws"
+image_builder = "packer"
+
+[safety]
+require_change_confirmation = true
+production_requires_reviewed_plan = true

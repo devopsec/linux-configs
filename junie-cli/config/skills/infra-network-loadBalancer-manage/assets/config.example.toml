@@ -1,0 +1,3 @@
+[defaults]
+http_class = "global_external_application"
+sip_signaling_class = "regional_external_passthrough_network"

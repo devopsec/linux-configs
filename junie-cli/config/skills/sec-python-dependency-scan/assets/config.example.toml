@@ -1,0 +1,15 @@
+checked = "2026-10-28"
+fail_on = ["high", "critical"]
+include_optional_groups = false
+
+[tools.pip_audit]
+enabled = true
+version = "2.10.1"
+
+[tools.osv_scanner]
+enabled = true
+version = "2.7.0"
+
+[suppressions]
+path = "<repo-relative-expiring-ignore-file>"
+require_owner_reason_expiry = true

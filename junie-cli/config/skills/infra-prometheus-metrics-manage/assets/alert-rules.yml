@@ -1,0 +1,81 @@
+# Alert/recording rule templates. Adapt metric names to your exporters, then:
+#   promtool check rules alert-rules.yml
+# Severity labels: page | ticket (see references/alerting-oncall.md)
+groups:
+  - name: host
+    rules:
+      - alert: TargetDown
+        expr: up == 0
+        for: 5m
+        labels: { severity: ticket }
+        annotations:
+          summary: "{{ $labels.job }} target {{ $labels.instance }} down"
+          runbook_url: "<runbook base>/TargetDown"
+      - alert: DiskWillFillIn24h
+        expr: predict_linear(node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"}[6h], 24 * 3600) < 0
+        for: 30m
+        labels: { severity: ticket }
+        annotations:
+          summary: "{{ $labels.mountpoint }} on {{ $labels.instance }} fills within 24h"
+          runbook_url: "<runbook base>/DiskWillFill"
+      - alert: DiskAlmostFull
+        expr: node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes < 0.05
+        for: 5m
+        labels: { severity: page }
+        annotations:
+          summary: "{{ $labels.mountpoint }} on {{ $labels.instance }} has {{ $value | humanizePercentage }} free"
+          runbook_url: "<runbook base>/DiskAlmostFull"
+      - alert: SystemdUnitFailed
+        expr: node_systemd_unit_state{state="failed"} == 1
+        for: 5m
+        labels: { severity: ticket }
+        annotations:
+          summary: "unit {{ $labels.name }} failed on {{ $labels.instance }}"
+          runbook_url: "<runbook base>/SystemdUnitFailed"
+
+
+  # Example 99.9% SLO for a sample API; confirm targets and series names with the service owner.
+  - name: slo-api-recording
+    rules:
+      - record: slo:sli_error:ratio_rate5m
+        expr: sum(rate(http_server_request_duration_seconds_count{job="api",http_response_status_code=~"5.."}[5m])) / sum(rate(http_server_request_duration_seconds_count{job="api"}[5m]))
+        labels: { service: api }
+      - record: slo:sli_error:ratio_rate30m
+        expr: sum(rate(http_server_request_duration_seconds_count{job="api",http_response_status_code=~"5.."}[30m])) / sum(rate(http_server_request_duration_seconds_count{job="api"}[30m]))
+        labels: { service: api }
+      - record: slo:sli_error:ratio_rate1h
+        expr: sum(rate(http_server_request_duration_seconds_count{job="api",http_response_status_code=~"5.."}[1h])) / sum(rate(http_server_request_duration_seconds_count{job="api"}[1h]))
+        labels: { service: api }
+      - record: slo:sli_error:ratio_rate6h
+        expr: sum(rate(http_server_request_duration_seconds_count{job="api",http_response_status_code=~"5.."}[6h])) / sum(rate(http_server_request_duration_seconds_count{job="api"}[6h]))
+        labels: { service: api }
+      - record: slo:sli_error:ratio_rate3d
+        expr: sum(rate(http_server_request_duration_seconds_count{job="api",http_response_status_code=~"5.."}[3d])) / sum(rate(http_server_request_duration_seconds_count{job="api"}[3d]))
+        labels: { service: api }
+  - name: slo-api-alerts
+    rules:
+      - alert: ApiErrorBudgetFastBurn
+        expr: |
+          (slo:sli_error:ratio_rate1h{service="api"} > (14.4 * 0.001) and slo:sli_error:ratio_rate5m{service="api"} > (14.4 * 0.001))
+          or
+          (slo:sli_error:ratio_rate6h{service="api"} > (6 * 0.001) and slo:sli_error:ratio_rate30m{service="api"} > (6 * 0.001))
+        for: 2m
+        labels: { severity: page, service: api }
+        annotations:
+          summary: "API burning error budget fast (error ratio {{ $value | humanizePercentage }})"
+          runbook_url: "<runbook base>/ApiErrorBudget"
+      - alert: ApiErrorBudgetSlowBurn
+        expr: slo:sli_error:ratio_rate3d{service="api"} > 0.001 and slo:sli_error:ratio_rate6h{service="api"} > 0.001
+        for: 1h
+        labels: { severity: ticket, service: api }
+        annotations:
+          summary: "API error budget slow burn (3d ratio {{ $value | humanizePercentage }})"
+          runbook_url: "<runbook base>/ApiErrorBudget"
+
+  - name: meta
+    rules:
+      - alert: Watchdog
+        expr: vector(1)
+        labels: { severity: none }
+        annotations:
+          summary: "Always firing; route to an external dead-man's-switch heartbeat"

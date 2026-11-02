@@ -1,0 +1,8 @@
+[defaults]
+provider = "pgvector"
+pgvector_version = "0.8.7"
+qdrant_version = "v1.20.0"
+weaviate_version = "v1.40.2"
+versions_checked = "2026-10-28"
+tenant_filter_required = true
+backup_before_destructive_change = true

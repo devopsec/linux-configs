@@ -1,0 +1,9 @@
+[defaults]
+trainer = "trl"
+trl_version = "1.16.0"
+axolotl_version = "0.21.0"
+versions_checked = "2026-10-28"
+method = "qlora-sft"
+model_revision = "<immutable-commit-sha>"
+dataset_version = "<immutable-dataset-version>"
+publish_externally = false

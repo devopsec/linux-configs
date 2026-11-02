@@ -1,0 +1,6 @@
+default_scanner = "kube-bench"
+profile = "gke"
+kube_bench_version = "v0.16.0"
+kubescape_version = "v4.0.16"
+trivy_version = "v0.76.1"
+mode = "report-only"

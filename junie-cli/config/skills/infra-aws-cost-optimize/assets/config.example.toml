@@ -1,0 +1,8 @@
+[tooling]
+billing_analysis = "cost-explorer"
+recommendations = "compute-optimizer"
+iac_for_resource_changes = "terraform" # Or "tofu".
+
+[safety]
+automatic_resource_deletion = false
+require_owner_approval_for_commitments = true

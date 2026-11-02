@@ -1,0 +1,5 @@
+[controls]
+injection_detection = "log-only"
+pii_scrubber = "self-hosted"
+tool_policy = "parameter-allowlist"
+output_policy = "encode-per-sink"

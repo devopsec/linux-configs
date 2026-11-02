@@ -1,0 +1,16 @@
+checked = "2026-10-28"
+format = "cyclonedx-json"
+scan_source_and_built_artifact = true
+
+[tools.syft]
+enabled = true
+version = "1.55.0"
+
+[tools.cosign]
+enabled = true
+version = "3.1.4"
+signing_mode = "keyless-oidc-or-managed-kms"
+
+[policy]
+verify_subject_digest = true
+require_provenance_before_promotion = true

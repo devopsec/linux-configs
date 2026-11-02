@@ -1,0 +1,2 @@
+renderer = "kubectl"
+standalone_version = "5.8.3"

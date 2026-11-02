@@ -1,0 +1,7 @@
+[vpn]
+gcp_admin_access = "iap"
+private_mesh = "wireguard"
+openvpn_version = "2.7.8"
+versions_checked = "2026-10-28"
+per_peer_keys = true
+require_route_review = true

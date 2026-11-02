@@ -1,0 +1,14 @@
+# Copy to ~/.junie/custom/configs/compliance/hipaa.toml and replace placeholders.
+[assessment]
+framework = "HIPAA"
+baseline = "Applicable 45 CFR Parts 160 and 164"
+baseline_checked = "2026-10-28"
+entity_role = "<confirm-covered-entity-or-business-associate>"
+system_boundary = []
+ephi_categories = []
+assessment_period = "<set-by-owner-or-assessor>"
+
+[governance]
+privacy_security_lead = "<role>"
+baa_references = []
+service_eligibility_review = "<approved-reference>"

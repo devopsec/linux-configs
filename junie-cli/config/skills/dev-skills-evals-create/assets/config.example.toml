@@ -1,0 +1,6 @@
+[runner]
+cli = "junie"
+mode = "headless"
+runs_per_prompt = 3
+timeout_seconds = 300
+require_confirmation = true

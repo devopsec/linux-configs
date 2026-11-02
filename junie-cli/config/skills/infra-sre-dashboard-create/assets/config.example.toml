@@ -1,0 +1,5 @@
+# Optional preferences for SLO dashboards and generated rules.
+dashboard_backend = "existing-grafana" # or "cloud-monitoring"
+rule_generator = "none" # "sloth" or "pyrra" only when requested
+objective_target = "ask-service-owner"
+window_days = 30

@@ -1,0 +1,7 @@
+[scanner]
+openscap_version = "1.4.6"
+complianceascode_content_version = "0.1.82"
+lynis_version = "3.1.7"
+versions_checked = "2026-10-28"
+profile_id = ""
+require_confirmed_profile = true

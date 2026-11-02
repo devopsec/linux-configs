@@ -1,0 +1,15 @@
+# Example only. Copy to ~/.junie/custom/configs/security/incident-response.toml
+# and replace every placeholder using approved, current site values.
+
+[evidence]
+bucket = "<approved-evidence-bucket>"
+region = "<approved-region>"
+
+[telephony]
+target = "<approved-sip-target>"
+htable = "<configured-htable-name>"
+cdr_source = "<approved-cdr-source>"
+rtp_range = "<configured-rtp-range>"
+
+[notification]
+regulator = "<applicable-regulator-or-none>"

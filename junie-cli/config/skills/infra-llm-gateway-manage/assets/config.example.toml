@@ -1,0 +1,9 @@
+[defaults]
+implementation = "litellm"
+version = "v1.106.4"
+versions_checked = "2026-10-28"
+require_signature_verification = true
+bind_address = "localhost:4000"
+cache_enabled = false
+prompt_capture_enabled = false
+master_key_source = "secret-manager"

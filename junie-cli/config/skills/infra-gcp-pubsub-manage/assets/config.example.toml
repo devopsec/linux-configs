@@ -1,0 +1,4 @@
+# Project, topic, subscription, and service identities are runtime inputs.
+default_delivery = "pull"
+assume_at_least_once = true
+require_idempotent_consumer = true

@@ -1,0 +1,17 @@
+checked = "2026-10-28"
+default_range = "working-tree"
+redact = true
+full_history_scan = false
+
+[tool]
+name = "gitleaks"
+version = "8.30.1"
+
+[report]
+format = "sarif"
+path = "/tmp/gitleaks.sarif"
+private_output = true
+
+[allowlist]
+paths = ["<reviewed-test-fixture-path>"]
+require_reason = true

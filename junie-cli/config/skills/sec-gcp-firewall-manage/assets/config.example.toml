@@ -1,0 +1,6 @@
+[gcp_firewall]
+preferred_tool = "opentofu"
+require_plan_review = true
+enable_logging = true
+allow_public_management_sources = false
+require_owner_approval_for_broad_sources = true

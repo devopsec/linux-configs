@@ -1,0 +1,5 @@
+# Optional preferences for Loki deployments; bucket names and retention are runtime inputs.
+storage_backend = "gcs" # or "s3", "filesystem" for development only
+tenant_mode = "multi-tenant"
+retention_policy = "service-owner-input"
+require_authenticated_gateway = true

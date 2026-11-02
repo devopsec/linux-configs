@@ -1,0 +1,13 @@
+checked = "2026-10-28"
+allowed_formats = ["safetensors", "onnx", "gguf"]
+require_immutable_source_revision = true
+require_digest_and_signature_before_promotion = true
+
+[tools.picklescan]
+enabled = true
+version = "1.0.5"
+isolated_execution = true
+
+[tools.cosign]
+enabled = true
+version = "3.1.4"

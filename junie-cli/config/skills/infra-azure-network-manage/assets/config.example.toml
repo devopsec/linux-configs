@@ -1,0 +1,8 @@
+[tooling]
+iac = "terraform" # Use "tofu" when the workspace standard is OpenTofu.
+cloud_cli = "az"
+path_diagnostics = "network-watcher"
+
+[network]
+public_ingress_default = false
+require_user_supplied_cidrs_and_ports = true

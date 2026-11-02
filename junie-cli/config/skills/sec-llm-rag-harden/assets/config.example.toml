@@ -1,0 +1,10 @@
+[scanners]
+malware = "clamav"
+secrets = "gitleaks"
+secrets_version = "8.30.1"
+secrets_version_checked = "2026-10-28"
+pii = "approved-self-hosted-or-cloud-dlp"
+
+[retrieval]
+tenant_filter = "server-side"
+default_action = "deny"

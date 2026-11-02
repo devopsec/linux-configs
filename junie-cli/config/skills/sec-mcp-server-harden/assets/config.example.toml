@@ -1,0 +1,9 @@
+[server]
+transport = "stdio"
+authorization = "deny-by-default"
+authentication = "not-required-for-local-stdio"
+
+[tests]
+schema_validation = true
+negative_authorization = true
+ssrf_boundary = true

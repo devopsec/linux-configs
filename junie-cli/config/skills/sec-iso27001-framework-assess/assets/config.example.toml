@@ -1,0 +1,12 @@
+# Copy to ~/.junie/custom/configs/compliance/iso27001.toml and replace placeholders.
+[assessment]
+framework = "ISO/IEC 27001"
+baseline = "ISO/IEC 27001:2022 with Amendment 1:2024"
+baseline_checked = "2026-10-28"
+isms_scope = []
+assessment_period = "<set-by-owner-or-auditor>"
+risk_method = "<approved-method-reference>"
+
+[governance]
+statement_of_applicability = "<approved-soa-reference>"
+internal_audit_plan = "<approved-plan-reference>"

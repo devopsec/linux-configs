@@ -1,0 +1,5 @@
+# Optional alerting preferences; store provider secrets separately.
+notification_provider = "existing" # or "cloud-monitoring", "alertmanager", "pagerduty"
+group_by = ["alertname", "service"]
+require_runbook_for_pages = true
+allow_automatic_remediation = false

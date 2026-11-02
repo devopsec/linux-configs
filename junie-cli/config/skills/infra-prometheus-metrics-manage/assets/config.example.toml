@@ -1,0 +1,5 @@
+# Optional preferences for metrics collection and query backends.
+backend = "managed-service-for-prometheus" # or "self-hosted-prometheus"
+scrape_interval_seconds = 30
+retention_days = 30
+dashboard_backend = "existing-grafana"

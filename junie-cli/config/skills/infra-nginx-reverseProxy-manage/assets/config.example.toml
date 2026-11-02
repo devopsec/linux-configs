@@ -1,0 +1,5 @@
+[defaults]
+preferred_proxy = "nginx"
+nginx_release_track = "stable"
+traefik_image_tag = "v3.7.16"
+traefik_image_digest = "<sha256-digest-from-approved-registry>"

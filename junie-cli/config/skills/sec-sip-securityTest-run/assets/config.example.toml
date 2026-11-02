@@ -1,0 +1,9 @@
+[checks]
+nmap_version = "7.992"
+sipp_version = "3.8.0"
+sipvicious_version = "0.3.8"
+versions_checked = "2026-10-28"
+max_probe_rate_per_second = 1
+max_calls = 1
+allow_enumeration = false
+allow_load_tests = false

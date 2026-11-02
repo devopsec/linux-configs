@@ -1,0 +1,7 @@
+[defaults]
+version = "v0.40.12"
+versions_checked = "2026-10-28"
+bind_address = "localhost:11434"
+model_store = "<host-managed-model-path>"
+max_parallel_requests = 2
+max_loaded_models = 1

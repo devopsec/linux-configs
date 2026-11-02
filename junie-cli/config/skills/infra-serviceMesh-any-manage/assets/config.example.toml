@@ -1,0 +1,4 @@
+mesh = "istio"
+istio_version = "1.31.3"
+linkerd_version = "edge-26.10.1"
+allow_linkerd_edge = false

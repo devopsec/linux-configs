@@ -1,0 +1,7 @@
+# Example only. Copy values into ~/.junie/custom/configs/security/tls.toml.
+# Never put credentials or unapproved targets in this file.
+
+[audit]
+probe_tool = "openssl"
+config_test = "native"
+expiry_warning_days = 15
