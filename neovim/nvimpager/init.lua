@@ -10,3 +10,9 @@ require("setup.options")
 
 -- Define custom keybindings and keyboard shortcuts
 require("setup.keymaps")
+
+-- Popup menu (completion, command-line, right-click) key handling
+require("setup.menus")
+
+-- Opaque, theme-derived popup/menu/console highlights
+require("setup.highlights")

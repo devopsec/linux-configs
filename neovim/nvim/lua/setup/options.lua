@@ -19,11 +19,19 @@ vim.opt.shortmess:append("F")
 -- noice.nvim owns command-line interaction in a centered popup.
 vim.opt.cmdheight = 0
 
--- Command-line Tab completion: the popup menu stays open while cycling with
--- <Tab>/<S-Tab>; typing (e.g. / or space) accepts the entry and continues.
+-- Command-line Tab completion: the first <Tab> fills the longest common
+-- prefix and opens the popup menu without a selection; navigation inside the
+-- menu is handled by lua/setup/menus.lua (<Up>/<Down>, <Home>/<End>, ...).
+-- 'wildcharm' lets those mappings trigger completion with a non-typed key.
 vim.opt.wildmenu = true
-vim.opt.wildmode = "full"
+vim.opt.wildmode = "longest:full,full"
 vim.opt.wildoptions = "pum"
+vim.opt.wildcharm = 26 -- <C-Z>
+
+-- Opaque popup menus and floating windows (no translucency)
+vim.opt.pumblend = 0
+vim.opt.winblend = 0
+vim.opt.guifont = "JetBrainsMono Nerd Font:h11,JetBrains Mono:h11"
 
 -- Disable audio bell on error
 vim.opt.errorbells = false
@@ -52,9 +60,15 @@ vim.opt.listchars = {
   nbsp = "␣",
 }
 
--- UI mouse support (wheel scrolling is kept mode-local in keymaps)
-vim.opt.mouse = "nih"
+-- UI mouse support in every mode: the terminal only reports wheel events
+-- while the mouse is enabled for the current mode, otherwise it sends
+-- <Up>/<Down> keys instead (which move the cursor or browse history and
+-- can change the mode). Native wheel scrolling keeps the current mode.
+vim.opt.mouse = "a"
+vim.opt.mousehide = true
 vim.opt.mousemodel = "popup_setpos"
+vim.opt.mousemoveevent = false
+vim.opt.mousescroll = "ver:5,hor:10"
 
 -- Per-mode cursor shapes (block in normal/visual/select, vertical bar in
 -- insert/cmdline/visual-exclusive, horizontal bar in replace/cmdline-replace/
@@ -106,12 +120,14 @@ vim.opt.laststatus = 3
 vim.defer_fn(function()
   vim.opt.cmdheight = 0
   vim.opt.laststatus = 3
+  vim.opt.pumblend = 0
 end, 0)
 vim.api.nvim_create_autocmd("User", {
   pattern = "VeryLazy",
   callback = function()
     vim.opt.cmdheight = 0
     vim.opt.laststatus = 3
+    vim.opt.pumblend = 0
   end,
 })
 

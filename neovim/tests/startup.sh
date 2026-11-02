@@ -61,6 +61,50 @@ function assert_clean_run() {
 function test_nvim_app() {
     local nvim_app="$1"
     NVIM_APPNAME="$nvim_app" assert_clean_run "$nvim_app" nvim --headless --startuptime /dev/stdout -c 'qall!'
+    test_behavior "$nvim_app"
+}
+
+# asserts options, key mappings and popup highlights of a loaded config (headless Lua)
+function test_behavior() {
+    local nvim_app="$1"
+    local lua
+    lua=$(cat <<'LUA'
+local missing = {}
+local function need(cond, what) if not cond then missing[#missing + 1] = what end end
+local function mapped(mode, lhs) return vim.fn.maparg(lhs, mode) ~= "" end
+local function hl(n) return vim.api.nvim_get_hl(0, { name = n, link = false }) end
+vim.defer_fn(function()
+  need(vim.o.mouse == "a", "mouse=a")
+  need(vim.o.pumblend == 0 and vim.o.winblend == 0, "pumblend/winblend=0")
+  need(vim.o.guifont:find("JetBrains", 1, true), "guifont")
+  need(vim.g.colors_name ~= nil, "colorscheme")
+  for _, lhs in ipairs({ "<C-PageUp>", "<C-PageDown>", "<C-Home>", "<C-End>", "<C-A-PageUp>", "<C-A-PageDown>",
+      "<C-A-Home>", "<C-A-End>", "<C-A-Up>", "<C-A-Down>", "<C-A-Left>", "<C-A-Right>" }) do
+    need(mapped("n", lhs), "n " .. lhs)
+  end
+  for _, lhs in ipairs({ "<Home>", "<End>", "<PageUp>", "<PageDown>", "<Tab>", "<S-Tab>", "<CR>", "<LeftMouse>" }) do
+    need(mapped("i", lhs), "i " .. lhs)
+  end
+  for _, lhs in ipairs({ "<Up>", "<Down>", "<Left>", "<Right>", "<Home>", "<End>", "<Tab>", "<S-Tab>", "<CR>", "<LeftMouse>" }) do
+    need(mapped("c", lhs), "c " .. lhs)
+  end
+  for _, lhs in ipairs({ "<ScrollWheelUp>", "<ScrollWheelDown>" }) do
+    need(mapped("i", lhs), "i " .. lhs)
+  end
+  need(hl("Pmenu").bg and hl("Pmenu").bg ~= hl("Normal").bg or hl("Normal").bg == nil, "Pmenu distinct from Normal")
+  need(hl("NoiceConsoleBorder").fg ~= hl("NoiceCmdlinePopupBorder").fg, "console border differs from cmdline border")
+  if vim.env.NVIM_APPNAME == "nvim" then
+    need(vim.fn.exists(":Themery") == 2, ":Themery")
+  end
+  if #missing > 0 then
+    io.stderr:write("BEHAVIOR MISSING: " .. table.concat(missing, ", ") .. "\n")
+    vim.cmd("cquit 1")
+  end
+  vim.cmd("qa!")
+end, 1500)
+LUA
+)
+    NVIM_APPNAME="$nvim_app" assert_clean_run "${nvim_app}_behavior" nvim --headless -c "lua $lua"
 }
 
 # resolves a guaranteed-unsandboxed nvim for the runtime-load test below:

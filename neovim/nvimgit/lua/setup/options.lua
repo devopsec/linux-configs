@@ -15,6 +15,20 @@ vim.opt.shortmess:append("F")
 -- noice.nvim owns command-line interaction in a centered popup.
 vim.opt.cmdheight = 0
 
+-- Command-line Tab completion: the first <Tab> fills the longest common
+-- prefix and opens the popup menu without a selection; navigation inside the
+-- menu is handled by lua/setup/menus.lua (<Up>/<Down>, <Home>/<End>, ...).
+-- 'wildcharm' lets those mappings trigger completion with a non-typed key.
+vim.opt.wildmenu = true
+vim.opt.wildmode = "longest:full,full"
+vim.opt.wildoptions = "pum"
+vim.opt.wildcharm = 26 -- <C-Z>
+
+-- Opaque popup menus and floating windows (no translucency)
+vim.opt.pumblend = 0
+vim.opt.winblend = 0
+vim.opt.guifont = "JetBrainsMono Nerd Font:h11,JetBrains Mono:h11"
+
 -- Disable audio bell on error
 vim.opt.errorbells = false
 
@@ -33,9 +47,15 @@ vim.opt.shiftwidth = 4      -- Indentation commands use 4 spaces
 vim.opt.softtabstop = 4     -- Backspace and Tab keys treat 4 spaces as a single unit
 vim.opt.expandtab = true    -- Insert spaces when the Tab key is pressed
 
--- UI mouse support (wheel scrolling is kept mode-local in keymaps)
-vim.opt.mouse = "nih"
+-- UI mouse support in every mode: the terminal only reports wheel events
+-- while the mouse is enabled for the current mode, otherwise it sends
+-- <Up>/<Down> keys instead (which move the cursor or browse history and
+-- can change the mode). Native wheel scrolling keeps the current mode.
+vim.opt.mouse = "a"
+vim.opt.mousehide = true
 vim.opt.mousemodel = "popup_setpos"
+vim.opt.mousemoveevent = false
+vim.opt.mousescroll = "ver:5,hor:10"
 
 -- Per-mode cursor shapes (block in normal/visual/select, vertical bar in
 -- insert/cmdline/visual-exclusive, horizontal bar in replace/cmdline-replace/
@@ -77,13 +97,26 @@ vim.opt.fillchars:append({
   diff      = '░' -- Dotted pattern for diff blocks
 })
 
+-- Panel shade derived from the theme's own Normal bg (not NormalFloat, which
+-- lua/setup/highlights.lua overrides with the popup bg): Normal darkened by
+-- 17.5%, which is exactly catppuccin's mantle for the Coffee palette.
+local function gutter_panel_bg()
+  local bg = vim.api.nvim_get_hl(0, { name = "Normal", link = false }).bg
+  if not bg then
+    return nil
+  end
+  local function darken(v)
+    return math.floor(v * 0.825 + 0.5)
+  end
+  local r, g, b = math.floor(bg / 65536) % 256, math.floor(bg / 256) % 256, bg % 256
+  return darken(r) * 65536 + darken(g) * 256 + darken(b)
+end
+
 -- Colors for the fillchars and native gutter. The gutter is themed with a
--- separated panel shade (NormalFloat's bg, e.g. catppuccin's mantle) kept
+-- separated panel shade (a darker Normal bg, e.g. catppuccin's mantle) kept
 -- distinct from Normal, so re-apply it after every colorscheme change.
 local function apply_gutter_highlights()
-  local normal = vim.api.nvim_get_hl(0, { name = "Normal", link = false })
-  local normal_float = vim.api.nvim_get_hl(0, { name = "NormalFloat", link = false })
-  local panel_bg = normal_float.bg or normal.bg
+  local panel_bg = gutter_panel_bg()
   if not panel_bg then
     return
   end

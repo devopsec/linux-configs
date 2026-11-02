@@ -30,6 +30,10 @@ return {
           position = { row = popup_row(-1), col = "50%" },
           size = { min_width = 60, width = 60, height = "auto" },
           border = { style = "rounded", padding = { 0, 1 } },
+          win_options = {
+            winblend = 0,
+            winhighlight = { Normal = "NoiceCmdlinePopup", FloatBorder = "NoiceCmdlinePopupBorder" },
+          },
         },
         cmdline_popupmenu = {
           view = "popupmenu",
@@ -39,7 +43,8 @@ return {
           border = { style = "rounded", padding = { 0, 1 } },
           zindex = 210,
           win_options = {
-            winhighlight = { Normal = "NoicePopupmenu", FloatBorder = "NoiceCmdlinePopupBorder" },
+            winblend = 0,
+            winhighlight = { Normal = "NoicePopupmenu", FloatBorder = "NoicePopupmenuBorder" },
           },
         },
         -- bottom-centered dialog above the statusline for installer progress
@@ -61,8 +66,27 @@ return {
           },
         },
         mini = {
-          position = { row = -2, col = "50%" },
+          position = { row = -3, col = "50%" },
           align = "center",
+          border = { style = "rounded", padding = { 0, 1 } },
+          win_options = {
+            winblend = 0,
+            winhighlight = { Normal = "NoiceCmdlinePopup", FloatBorder = "NoiceConsoleBorder" },
+          },
+        },
+        popup = {
+          border = { style = "rounded", padding = { 0, 1 } },
+          win_options = {
+            winblend = 0,
+            winhighlight = { Normal = "NoiceCmdlinePopup", FloatBorder = "NoiceConsoleBorder" },
+          },
+        },
+        messages = {
+          border = { style = "rounded", padding = { 0, 1 } },
+          win_options = {
+            winblend = 0,
+            winhighlight = { Normal = "NoiceCmdlinePopup", FloatBorder = "NoiceConsoleBorder" },
+          },
         },
       },
       routes = {
@@ -95,9 +119,28 @@ return {
       flavour = "mocha",
       transparent_background = false,
       term_colors = true,
+      color_overrides = {
+        -- "Catppuccin Coffee": grey-neutral mocha
+        mocha = {
+          text = "#f5f5f5",
+          subtext1 = "#dedede",
+          subtext0 = "#c7c7c7",
+          overlay2 = "#b3b3b3",
+          overlay1 = "#9c9c9c",
+          overlay0 = "#878787",
+          surface2 = "#707070",
+          surface1 = "#595959",
+          surface0 = "#454545",
+          base = "#2e2e2e",
+          mantle = "#262626",
+          crust = "#1c1c1c",
+        },
+      },
       styles = {
         comments = { "italic" },
         conditionals = { "italic" },
+        keywords = { "italic" },
+        booleans = { "bold" },
       },
       integrations = {
         cmp = true,
@@ -126,7 +169,6 @@ return {
           GitSignsAdd = { fg = colors.green, bg = gutter_bg },
           GitSignsChange = { fg = colors.yellow, bg = gutter_bg },
           GitSignsDelete = { fg = colors.red, bg = gutter_bg },
-          NormalFloat = { bg = colors.mantle },
         }
       end,
     },

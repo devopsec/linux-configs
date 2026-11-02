@@ -77,7 +77,16 @@ require("lazy").setup({
       import = "lazyvim.plugins.init",
       dependencies = { "catppuccin" },
       opts = {
-        colorscheme = "catppuccin-mocha",
+        -- themery restores the saved theme itself; only force the default
+        -- (Catppuccin Coffee) when no theme has been saved yet
+        colorscheme = function()
+          local ok, theme = pcall(function()
+            return require("themery").getCurrentTheme()
+          end)
+          if not (ok and theme) then
+            vim.cmd.colorscheme("catppuccin-mocha")
+          end
+        end,
       },
     },
     { import = "lazyvim.plugins.coding" },
