@@ -1,0 +1,8 @@
+[workflow_checks]
+syntax_tool = "actionlint"
+security_tool = "zizmor"
+minimum_severity = "high"
+
+[action_pinning]
+strategy = "full-commit-sha"
+reviewed_on = "2026-10-28"
