@@ -1,0 +1,34 @@
+{
+  "mcpServers": {
+    "pycharm": {
+      "command": "/home/anon/.local/share/JetBrains/Toolbox/apps/pycharm/bin/pycharm",
+      "args": [
+        "stdioMcpServer"
+      ],
+      "env": {
+        "IJ_MCP_SERVER_PORT": "64343"
+      }
+    },
+    "clion": {
+      "command": "/home/anon/.local/share/JetBrains/Toolbox/apps/clion/bin/clion",
+      "args": [
+        "stdioMcpServer"
+      ],
+      "env": {
+        "IJ_MCP_SERVER_PORT": "64344"
+      },
+      "enabled": false
+    },
+    "mise": {
+      "command": "/usr/bin/mise",
+      "args": [
+        "--cd",
+        "/home/anon",
+        "mcp"
+      ],
+      "env": {
+        "MISE_CONFIG_FILE": "/home/anon/.config/mise/config.toml"
+      }
+    }
+  }
+}

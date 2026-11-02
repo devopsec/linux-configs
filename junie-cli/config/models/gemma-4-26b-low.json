@@ -1,0 +1,6 @@
+{
+  "baseUrl": "http://gamebox:2222/v1/chat/completions",
+  "id": "gemma-4-26b:low",
+  "apiType": "OpenAICompletion",
+  "temperature": 1.0
+}

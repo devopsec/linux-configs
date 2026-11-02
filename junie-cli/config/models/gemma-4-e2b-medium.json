@@ -1,0 +1,6 @@
+{
+  "baseUrl": "http://gamebox:2222/v1/responses",
+  "id": "gemma-4-e2b:medium",
+  "apiType": "OpenAIResponses",
+  "temperature": 1.0
+}

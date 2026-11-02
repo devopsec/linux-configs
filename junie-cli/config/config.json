@@ -1,0 +1,14 @@
+{
+  "provider": "anthropic",
+  "flags": [],
+  "auto-update": false,
+  "brave": false,
+  "time-limit": 900,
+  "token-budget": 3000000,
+  "guidelines-location": "./AGENTS.md",
+  "agent-default-location": true,
+  "command-default-locations": true,
+  "mcp-default-locations": true,
+  "model-default-locations": true,
+  "skill-default-locations": true
+}

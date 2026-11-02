@@ -1,0 +1,60 @@
+{
+    "version": 6,
+    "allowWrite": [
+        "${PROJECT_DIR}",
+        "${TMPDIR}",
+        "/tmp",
+        "/private/tmp",
+        "~/.cache",
+        "~/.gradle",
+        "~/.m2",
+        "~/.ivy2",
+        "~/.konan",
+        "~/.sdkman",
+        "~/.npm",
+        "~/.yarn",
+        "~/.pnpm-store",
+        "~/.node-gyp",
+        "~/.nvm",
+        "~/.bun",
+        "~/.deno",
+        "~/.cargo/registry",
+        "~/.cargo/git",
+        "~/.cargo/.package-cache",
+        "~/.cargo/.package-cache-mutate",
+        "~/.cargo/.global-cache",
+        "~/.rustup",
+        "~/.pyenv",
+        "~/.local/share/uv",
+        "~/.gem",
+        "~/.rbenv",
+        "~/.composer",
+        "~/.nuget",
+        "~/.dotnet",
+        "~/.docker",
+        "~/.android",
+        "~/Library/Caches",
+        "~/Library/Developer"
+    ],
+    "denyWrite": [],
+    "denyRead": [
+        "~/.ssh"
+    ],
+    "allowRead": [
+        "~/.ssh/config",
+        "~/.ssh/known_hosts",
+        "~/.ssh/known_hosts2"
+    ],
+    "ignoreViolations": {},
+    "network": {
+        "unrestricted": true,
+        "allowedDomains": [],
+        "deniedDomains": [],
+        "allowUnixSockets": [
+            "${SSH_AUTH_SOCK}"
+        ],
+        "allowSystemCertificateValidation": true,
+        "allowLocalBinding": true,
+        "allowAllUnixSockets": true
+    }
+}
