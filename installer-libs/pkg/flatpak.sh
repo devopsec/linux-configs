@@ -63,7 +63,7 @@ function install_via_flatpak() {
 
     if [[ -n "${LOCAL_FLATPAK_RESOURCE[$dep]:-}" ]]; then
         [[ "$version" == latest ]] || return 1
-        bundle="$SCRIPT_DIR/resources/${LOCAL_FLATPAK_RESOURCE[$dep]}"
+        bundle="$SCRIPT_DIR/resources/flatpaks/${LOCAL_FLATPAK_RESOURCE[$dep]}"
         [[ -f "$bundle" ]] || return 1
         base_id="${FLATPAK_BASE_APP_ID[$dep]:-}"
         [[ -n "$base_id" ]] || return 1

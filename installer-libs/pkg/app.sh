@@ -30,7 +30,7 @@ function install_via_sys_pkg_mgr() {
 
     if [[ "$(sys_pkg_manager)" == apt && -n "${LOCAL_DEB_RESOURCE[$dep]:-}" ]]; then
         deb_name="${LOCAL_DEB_RESOURCE[$dep]}"
-        deb_path="$SCRIPT_DIR/resources/$deb_name"
+        deb_path="$SCRIPT_DIR/resources/debs/$deb_name"
         if [[ -f "$deb_path" ]]; then
             run_priv dpkg -i "$deb_path" || run_priv apt-get install -y -f || return 1
             return 0
