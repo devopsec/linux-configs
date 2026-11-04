@@ -1,6 +1,7 @@
 ---
 name: "vcs-git-commit-create"
 description: "Git commit workflows using Conventional Commits: (1) message-only draft for staged/unstaged/all pending changes without touching git state, (2) stage and commit after explicit approval, (3) split multi-scope suggestions, (4) optional amend only when the user explicitly asks and policy allows. Use when asked to commit, draft a commit message, summarize staged/pending changes, or prepare conventional commit text. Never commit unless the user explicitly requests a commit."
+model: haiku
 ---
 
 # Git commit (multi-mode)

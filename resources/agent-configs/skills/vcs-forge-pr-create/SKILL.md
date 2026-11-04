@@ -1,6 +1,7 @@
 ---
 name: vcs-forge-pr-create
 description: Creates GitHub Pull Requests (and GitLab/Gitea/Forgejo merge/pull requests) with the forge CLI, automated validation, and task tracking. Use when the user explicitly asks to create a PR, open a pull request, submit for review, or check if work is ready for PR. Analyzes commits, validates task completion, generates Conventional Commits title and description, and suggests labels. NOTE — for merging existing PRs, use the vcs-forge-pr-merge skill instead.
+model: haiku
 ---
 
 # Pull request creation (forge)

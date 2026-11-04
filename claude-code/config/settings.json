@@ -125,7 +125,7 @@
     "defaultMode": "default",
     "disableBypassPermissionsMode": "disable"
   },
-  "model": "opus",
+  "model": "sonnet",
   "enableAllProjectMcpServers": false,
   "sandbox": {
     "enabled": true,

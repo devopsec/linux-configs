@@ -1,6 +1,7 @@
 ---
 name: vcs-forge-pr-merge
 description: Merges GitHub Pull Requests (and GitLab/Gitea/Forgejo merge/pull requests) with the forge CLI after validating a pre-merge checklist. Use when the user explicitly asks to merge a PR, close a PR, finalize a PR, complete a merge, approve and merge, or execute a merge. Runs pre-merge validation (tests, lint, CI, comments), confirms with the user, merges with the project format, and handles post-merge cleanup.
+model: haiku
 ---
 
 # Pull request merge (forge)

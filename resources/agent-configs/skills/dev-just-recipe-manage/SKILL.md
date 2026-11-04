@@ -1,6 +1,7 @@
 ---
 name: dev-just-recipe-manage
 description: Discover, run, write and edit `just` recipes in a `justfile`. Use when a project has a `justfile` or the user mentions `just`, `justfile`, or recipes; prefer recipes over ad-hoc commands for commonly used commands.
+model: haiku
 ---
 
 # Just Recipe Management

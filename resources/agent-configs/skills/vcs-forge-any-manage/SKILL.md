@@ -1,6 +1,7 @@
 ---
 name: vcs-forge-any-manage
 description: "Operate GitHub, GitLab, Gitea/Forgejo/Codeberg, Bitbucket Cloud, Gerrit, and Tangled from the command line with git-pkgs/forge (`forge`): pull/merge requests (list, view, diff, checkout, create, edit, comment, review, merge), issues, labels, milestones, CI runs and job logs, commit statuses, releases, repos, secrets, notifications, and raw REST calls (`forge api`) with JSON output for scripting. Use when a task needs a git forge from the terminal, when replacing or translating `gh`/`glab`/`tea` commands, when the user mentions forge, PRs/MRs, CI status, or releases on a non-GitHub forge, or when other vcs-* skills need forge operations. For gcli (herrhotzenplotz/gcli) or Bugzilla use vcs-gcli-any-manage."
+model: haiku
 ---
 
 # forge (git-pkgs/forge)

@@ -5,7 +5,8 @@ usage() {
 Summary:
     Install claude-code/config/ into ~/.claude as fresh copies, resolving the
     symlinks into resources/agent-configs/:
-      skills/, custom/, themes/   mirrored (files removed from the repo are deleted)
+      skills/, custom/, themes/, agents/
+                                  mirrored (files removed from the repo are deleted)
       commands/                   rendered from the shared templates, mirrored
       settings.json               repo version, plus the local-only keys listed in
                                   PRESERVE_SETTINGS (autoMode) taken from the current file
@@ -13,8 +14,8 @@ Summary:
                                   in ~/.claude.json via 'claude mcp'; servers not in
                                   the repo are left alone and reported
       CLAUDE.md                   generated: junie-cli AGENTS.md sections 0-5 converted
-                                  for Claude Code, then CLAUDE.security.md and
-                                  CLAUDE.workdir.md appended
+                                  for Claude Code, then CLAUDE.security.md,
+                                  CLAUDE.workdir.md and CLAUDE.agents.md appended
     Runtime state (projects/, sessions, history, credentials, plugins, ...) is
     never touched.
 
@@ -41,7 +42,7 @@ set -Eeuo pipefail
 # settings.json keys that stay local: autoMode describes work repositories and is
 # kept out of this repo, so the current value survives the fresh copy.
 PRESERVE_SETTINGS='["autoMode"]'
-MIRROR_DIRS=(skills custom themes)
+MIRROR_DIRS=(skills custom themes agents)
 
 here="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
 src="$here/config"
@@ -142,7 +143,7 @@ sed -n '1,/^## 6\. /p' "$agents_md" | sed '$d' \
           -e 's/Never `cat` files to terminal\./Never `cat` files in Bash./' \
           -e 's|~/\.junie/custom/|~/.claude/custom/|g' \
     > "$tmp/CLAUDE.md"
-cat "$src/CLAUDE.security.md" "$src/CLAUDE.workdir.md" >> "$tmp/CLAUDE.md"
+cat "$src/CLAUDE.security.md" "$src/CLAUDE.workdir.md" "$src/CLAUDE.agents.md" >> "$tmp/CLAUDE.md"
 install_file "$tmp/CLAUDE.md" "$claude/CLAUDE.md" 644
 
 if ((dry)); then

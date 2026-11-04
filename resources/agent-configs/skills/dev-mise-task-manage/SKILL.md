@@ -1,6 +1,7 @@
 ---
 name: dev-mise-task-manage
 description: Create, update, run, debug, discover, or show help for mise tasks (file tasks and TOML tasks), including task interfaces, usage directives, and output behavior. Use when a request mentions a mise task, `mise run`, `mise.toml` tasks, or a tasks directory.
+model: haiku
 ---
 
 # Mise Task Management
