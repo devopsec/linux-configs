@@ -63,7 +63,7 @@ shift $((OPTIND - 1))
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-opts=(-rcL --delete --exclude=__pycache__/)
+opts=(-rcL --delete --chmod=go-rwx --exclude=__pycache__/ --exclude-from="$here/../.gitignore" --exclude=.git/)
 if ((dry)); then opts+=(--dry-run --itemize-changes); else opts+=(--info=del); fi
 
 # Installs $1 as $2 unless identical; reports instead of writing in dry-run mode.
@@ -144,7 +144,7 @@ sed -n '1,/^## 6\. /p' "$agents_md" | sed '$d' \
           -e 's|~/\.junie/custom/|~/.claude/custom/|g' \
     > "$tmp/CLAUDE.md"
 cat "$src/CLAUDE.security.md" "$src/CLAUDE.workdir.md" "$src/CLAUDE.agents.md" >> "$tmp/CLAUDE.md"
-install_file "$tmp/CLAUDE.md" "$claude/CLAUDE.md" 644
+install_file "$tmp/CLAUDE.md" "$claude/CLAUDE.md" 600
 
 if ((dry)); then
     echo "dry run: nothing written ($src -> $claude)"

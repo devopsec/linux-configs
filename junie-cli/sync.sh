@@ -52,7 +52,7 @@ shift $((OPTIND - 1))
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-opts=(-rcL --exclude=__pycache__/)
+opts=(-rcL --chmod=go-rwx --exclude=__pycache__/ --exclude-from="$here/../.gitignore" --exclude=.git/)
 if ((dry)); then opts+=(--dry-run --itemize-changes); else opts+=(--info=del); fi
 
 # Render the shared command templates for Junie.
