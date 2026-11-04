@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .paths import JuniePaths, make_paths
+from .paths import AgentPaths, JuniePaths, make_paths
 
 FRONTMATTER_RE = re.compile(r'^---\s*\n(.*?)\n---\s*\n?', re.DOTALL)
 NAME_RE = re.compile(r'^name:\s*["\']?([^"\'\n]+)["\']?\s*$', re.M)
@@ -59,7 +59,7 @@ class CommandInfo:
 
 _PLACEHOLDER_RE = re.compile(r'\$([A-Za-z_][A-Za-z0-9_]*)')
 _EXAMPLES_RE = re.compile(r'^```text[ \t]*\n(.*?)^```', re.M | re.S)
-_SCRIPT_RE = re.compile(r'^\s*python3\s+(~/\.junie/custom/scripts/\S+\.py)\b', re.M)
+_SCRIPT_RE = re.compile(r'^\s*python3\s+(~/\.(?:junie|claude)/custom/scripts/\S+\.py)\b', re.M)
 
 
 def extract_command_examples(body: str) -> list[str]:
@@ -71,7 +71,7 @@ def extract_command_examples(body: str) -> list[str]:
 
 
 def extract_command_script(body: str) -> str | None:
-    """Tilde path of the wrapped `python3 ~/.junie/custom/scripts/...py` script, if any."""
+    """Tilde path of the wrapped `python3 ~/.<agent>/custom/scripts/...py` script, if any."""
     m = _SCRIPT_RE.search(body or '')
     return m.group(1) if m else None
 
@@ -92,12 +92,16 @@ def extract_command_placeholders(body: str) -> list[str]:
     return out
 
 
-def required_command_placeholders(body: str, allow_prompt_argument: bool = False) -> list[str]:
+def required_command_placeholders(body: str, allow_prompt_argument: bool = False, agent: str = 'junie') -> list[str]:
     """Placeholders that block bare /cmd until name=value is supplied.
 
-    When allowPromptArgument is true, ``$prompt`` is the optional free-form slot and
-    must not be treated as a required named arg (bare /cmd must still run).
+    Junie: when allowPromptArgument is true, ``$prompt`` is the optional free-form slot and
+    must not be treated as a required named arg (bare /cmd must still run); any other
+    dollar placeholder is a required named arg. Claude Code only substitutes ``$ARGUMENTS``
+    and ``$1``…``$9`` (both optional) and leaves other dollar text alone, so nothing blocks.
     """
+    if agent == 'claude':
+        return []
     names = extract_command_placeholders(body)
     if allow_prompt_argument:
         return [n for n in names if n.lower() not in _OPTIONAL_PROMPT_NAMES]
@@ -245,7 +249,7 @@ def list_commands(paths: JuniePaths | None = None, query: str | None = None) -> 
             body = text[fm.end() :]
         allow_raw = meta.get('allowPromptArgument', meta.get('allow_prompt_argument', '')).strip().lower()
         allow = allow_raw in ('true', 'yes', '1')
-        placeholders = required_command_placeholders(body, allow_prompt_argument=allow)
+        placeholders = required_command_placeholders(body, allow_prompt_argument=allow, agent=p.agent)
         info = CommandInfo(
             name=name,
             path=f,
@@ -289,20 +293,42 @@ def list_models(paths: JuniePaths | None = None) -> list[ModelInfo]:
     return out
 
 
+_REDACTED = '<redacted>'
+
+
+def _redact_server(cfg: Any) -> Any:
+    """Keep names/commands/args; hide env and header values (they may hold tokens)."""
+    if not isinstance(cfg, dict):
+        return cfg
+    out = dict(cfg)
+    for key in ('env', 'headers'):
+        if isinstance(out.get(key), dict):
+            out[key] = {k: _REDACTED for k in out[key]}
+    return out
+
+
 def load_mcp(paths: JuniePaths | None = None) -> dict[str, Any]:
+    """MCP config as ``{'mcpServers': {...}}``. For Claude Code only the user-scope servers of
+    ~/.claude.json are returned (the rest of that file is account/project state), redacted."""
     p = paths or make_paths()
     if not p.mcp.is_file():
         return {}
     try:
-        return json.loads(p.mcp.read_text(encoding='utf-8'))
+        data = json.loads(p.mcp.read_text(encoding='utf-8'))
     except json.JSONDecodeError:
-        return {'_error': 'invalid mcp.json'}
+        return {'_error': f'invalid {p.mcp.name}'}
+    if p.agent == 'claude':
+        servers = data.get('mcpServers') or {}
+        return {'mcpServers': {name: _redact_server(cfg) for name, cfg in servers.items()}}
+    return data
 
 
 def session_count(paths: JuniePaths | None = None) -> int:
     p = paths or make_paths()
     if not p.sessions.is_dir():
         return 0
+    if p.agent == 'claude':
+        return sum(1 for d in p.sessions.iterdir() if d.is_dir() for _ in d.glob('*.jsonl'))
     return sum(1 for d in p.sessions.iterdir() if d.is_dir() and d.name.startswith('session-'))
 
 
@@ -330,10 +356,17 @@ def status_snapshot(paths: JuniePaths | None = None) -> dict[str, Any]:
             settings = json.loads(p.settings.read_text(encoding='utf-8'))
         except json.JSONDecodeError:
             settings = {'_error': 'invalid'}
+    missing_doc = sum(
+        1 for s in skills if not (s.has_agents_claude if p.agent == 'claude' else s.has_agents_junie)
+    )
     return {
+        'agent': p.agent,
+        'label': p.label,
         'home': str(p.home),
+        'entrypoint': str(p.agents_md),
         'skills': len(skills),
         'skills_with_skill_md': sum(1 for s in skills if s.has_skill_md),
+        'skills_missing_agent_doc': missing_doc,
         'skills_missing_junie_agent': sum(1 for s in skills if not s.has_agents_junie),
         'commands': len(cmds),
         'models': len(models),
@@ -349,4 +382,7 @@ def status_snapshot(paths: JuniePaths | None = None) -> dict[str, Any]:
         'token_budget': cfg.get('token-budget'),
         'time_limit': cfg.get('time-limit'),
         'brave_flag': cfg.get('brave'),
+        'theme': settings.get('theme'),
+        'permissions_mode': (settings.get('permissions') or {}).get('defaultMode')
+        if isinstance(settings.get('permissions'), dict) else None,
     }

@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Zero-LLM shim: runs the shared script from this agent home's custom/scripts/.
+exec python3 "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../scripts/find-housing/find_housing.py" "$@"

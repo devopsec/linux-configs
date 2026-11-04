@@ -1,17 +1,18 @@
 ---
 description: "Search Craigslist apartment rentals without the LLM agent — city, max rent, bedrooms/bathrooms, free-text query, optional posting details"
 allowPromptArgument: true
+argument-hint: "--city CITY [--max-rent N] [--min-bedrooms N] [--query TEXT] [...]"
 ---
 
 EXECUTE IMMEDIATELY — one shell call. No planning, repo exploration or guideline loading.
 
 ```bash
-python3 ~/.junie/custom/scripts/find-housing/find_housing.py --format json $prompt
+python3 {{agent_home}}/custom/scripts/find-housing/find_housing.py --format json {{args}}
 ```
 
-- Bare `/find-housing` → script prints usage and exits 2 unless `city` is set in `~/.config/find_housing.cfg`. If it exits 2 (usage error, e.g. natural-language input): run `python3 ~/.junie/custom/scripts/find-housing/find_housing.py -h`, map the request onto real flags using the table below, echo the resolved command, run once more.
-- The body already passes `--format json` (the script's direct default is `table`). `$prompt` is appended after it, so a user's `--format table` wins (argparse: last value wins). Pass `$prompt` through **unchanged** as argv.
-- Shell metacharacters in `$prompt` are interpreted by bash. Quote multi-word values, and avoid `&`, `;`, `|` in `--query` (e.g. write `dogs and cats` rather than `dogs & cats`).
+- Bare `/find-housing` → script prints usage and exits 2 unless `city` is set in `~/.config/find_housing.cfg`. If it exits 2 (usage error, e.g. natural-language input): run `python3 {{agent_home}}/custom/scripts/find-housing/find_housing.py -h`, map the request onto real flags using the table below, echo the resolved command, run once more.
+- The body already passes `--format json` (the script's direct default is `table`). The arguments are appended after it, so a user's `--format table` wins (argparse: last value wins). Pass the arguments through **unchanged** as argv. Works the same from any agent (no agent-specific state).
+- Shell metacharacters in the arguments are interpreted by bash. Quote multi-word values, and avoid `&`, `;`, `|` in `--query` (e.g. write `dogs and cats` rather than `dogs & cats`).
 - `--city` is required unless `city` is set in `~/.config/find_housing.cfg`. Unknown cities fall back to the name with spaces removed. Use quotes for multi-word values, e.g. `--query "dog friendly"`.
 - Defaults come from `~/.config/find_housing.cfg` (optional, section `[find_housing]`). Precedence: CLI flag > config file > built-in default. The body's `--format json` overrides a config `format = table`; a user `--format table` overrides both. Use `--no-details` to override a config `details = yes`. Config values `city`/`query`/`format` may be quoted; inline comments need ` #`/` ;` after whitespace. A config min/max bound that conflicts with the opposite CLI bound exits 2 naming both. Config errors exit 2 with the file path and key on stderr.
 - Summarize the JSON in chat (rent, beds/baths, location, URL). Bulky output → `/tmp/find-housing-*.json`.

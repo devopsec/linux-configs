@@ -168,7 +168,7 @@ class TestCLISmoke(unittest.TestCase):
         home = str(Path.home() / '.junie')
         r = run_cli('--junie-home', home, '--no-color', 'status')
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn('Junie agent status', r.stdout)
+        self.assertIn('Junie CLI agent status', r.stdout)
         r2 = run_cli('--junie-home', home, '--no-color', 'docs', 'show', 'agents', '--format', 'toc')
         self.assertEqual(r2.returncode, 0, r2.stderr)
         self.assertTrue(len(r2.stdout) > 20)
@@ -251,7 +251,7 @@ class TestCLISmoke(unittest.TestCase):
         home = str(Path.home() / '.junie')
         r = run_cli('--junie-home', home, '--no-color')
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn('Junie agent status', r.stdout)
+        self.assertIn('Junie CLI agent status', r.stdout)
 
     def test_check_args_no_fs_access(self) -> None:
         with tempfile.TemporaryDirectory() as td:
@@ -469,6 +469,100 @@ class TestSubcommandUsability(unittest.TestCase):
         self.assertEqual(r.returncode, 2)
         self.assertEqual(r.stdout, '')
         self.assertIn('did you mean: domain-routing', r.stderr)
+
+
+def _agentless_env(**extra: str) -> dict:
+    """Environment without any agent-detection variables, plus ``extra``."""
+    drop = ('AGENT_TARGET', 'CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'JUNIE_SESSION_ID', 'JUNIE_SESSION',
+            'JUNIE_CURRENT_SESSION', 'CLAUDE_HOME', 'CLAUDE_CONFIG_DIR', 'JUNIE_HOME')
+    env = {k: v for k, v in os.environ.items() if k not in drop}
+    env.update(extra)
+    return env
+
+
+class TestClaudeAgent(unittest.TestCase):
+    """agentmgr --agent claude against a throwaway Claude Code home."""
+
+    def _home(self, td: str) -> Path:
+        home = Path(td) / 'claude'
+        (home / 'skills' / 'demo-skill' / 'agents').mkdir(parents=True)
+        (home / 'skills' / 'demo-skill' / 'SKILL.md').write_text(
+            '---\nname: demo-skill\ndescription: Demo. Use when testing.\n---\n# Demo\n', encoding='utf-8')
+        (home / 'skills' / 'demo-skill' / 'agents' / 'claude.md').write_text('# claude\n', encoding='utf-8')
+        (home / 'commands').mkdir()
+        (home / 'commands' / 'demo.md').write_text(
+            '---\ndescription: "Demo"\nallowPromptArgument: true\n---\n\n```bash\n'
+            'python3 ~/.claude/custom/scripts/agentmgr/agentmgr.py --agent claude $ARGUMENTS\n```\n',
+            encoding='utf-8')
+        (home / 'CLAUDE.md').write_text('# Claude entrypoint\n', encoding='utf-8')
+        (home / 'settings.json').write_text(json.dumps({'model': 'opus', 'theme': 'dark'}), encoding='utf-8')
+        (home / '.claude.json').write_text(json.dumps({
+            'oauthAccount': {'emailAddress': 'nobody@example.com'},
+            'mcpServers': {'demo': {'type': 'stdio', 'command': '/bin/true', 'env': {'API_TOKEN': 'secret-value'},
+                                    'headers': {'Authorization': 'Bearer secret-value'}}},
+        }), encoding='utf-8')
+        (home / 'projects' / '-tmp').mkdir(parents=True)
+        (home / 'projects' / '-tmp' / 'abc.jsonl').write_text('{}\n', encoding='utf-8')
+        return home
+
+    def _run(self, home: Path, *args: str) -> subprocess.CompletedProcess[str]:
+        return run_cli('--agent', 'claude', '--home', str(home), '--no-color', *args, env=_agentless_env())
+
+    def test_status_paths_mcp(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            home = self._home(td)
+            r = self._run(home, 'status')
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn('Claude Code agent status', r.stdout)
+            self.assertIn('CLAUDE.md', r.stdout)
+            self.assertNotIn('token-budget', r.stdout)
+            snap = json.loads(self._run(home, '--json', 'status').stdout)
+            self.assertEqual((snap['agent'], snap['skills_missing_agent_doc'], snap['sessions'], snap['mcp_servers']),
+                             ('claude', 0, 1, 1))
+            paths = json.loads(self._run(home, '--json', 'paths').stdout)
+            self.assertIn('CLAUDE.md', paths)
+            self.assertNotIn('config.json', paths)
+            self.assertEqual(paths['.claude.json'], str(home / '.claude.json'))
+            mcp = self._run(home, '--json', 'mcp')
+            self.assertNotIn('secret-value', mcp.stdout)
+            self.assertNotIn('nobody@example.com', mcp.stdout)
+            self.assertEqual(json.loads(mcp.stdout)['mcpServers']['demo']['env'], {'API_TOKEN': '<redacted>'})
+
+    def test_commands_lint_accepts_arguments(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            home = self._home(td)
+            r = self._run(home, '--json', 'commands', 'lint')
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            entry = json.loads(r.stdout)[0]
+            self.assertEqual((entry['ok'], entry['required_placeholders']), (True, []))
+            self.assertEqual(entry['script'], '~/.claude/custom/scripts/agentmgr/agentmgr.py')
+
+    def test_junie_only_and_config(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            home = self._home(td)
+            for cmd in (['tune', 'show'], ['workflow', 'audit'], ['models']):
+                r = self._run(home, *cmd)
+                self.assertEqual(r.returncode, 2, cmd)
+                self.assertIn('Junie-specific', r.stderr)
+            r = self._run(home, '--json', 'config', 'set', 'theme', 'light')
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(json.loads(r.stdout)['target'], 'settings')
+            r = self._run(home, 'config', 'set', 'x', '1', '--which', 'config')
+            self.assertEqual(r.returncode, 2)
+
+    def test_unresolvable_agent_exits_2(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            (Path(td) / 'j').mkdir()
+            (Path(td) / 'c').mkdir()
+            env = _agentless_env(JUNIE_HOME=str(Path(td) / 'j'), CLAUDE_HOME=str(Path(td) / 'c'))
+            r = subprocess.run([sys.executable, str(AGENTMGR), 'status'], capture_output=True, text=True,
+                               env=env, stdin=subprocess.DEVNULL, timeout=60)
+            self.assertEqual(r.returncode, 2)
+            self.assertIn('--agent', r.stderr)
+            r = subprocess.run([sys.executable, str(AGENTMGR), 'status'], capture_output=True, text=True,
+                               env={**env, 'AGENT_TARGET': 'claude'}, stdin=subprocess.DEVNULL, timeout=60)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn('Claude Code agent status', r.stdout)
 
 
 if __name__ == '__main__':

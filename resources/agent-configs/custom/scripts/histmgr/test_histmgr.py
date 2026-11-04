@@ -93,7 +93,7 @@ class HistmgrUnit(unittest.TestCase):
                 encoding='utf-8',
             )
 
-            with mock.patch.dict(os.environ, {'JUNIE_HOME': str(home), 'JUNIE_SESSION_ID': 'session-live'}):
+            with mock.patch.dict(os.environ, {'JUNIE_HOME': str(home), 'JUNIE_SESSION_ID': 'session-live', 'AGENT_TARGET': 'junie'}):
                 ns = hm.build_parser().parse_args(
                     ['delete', 'session-live', 'session-old', '--yes', '--dry-run']
                 )
@@ -101,7 +101,7 @@ class HistmgrUnit(unittest.TestCase):
                 rc = hm.cmd_delete(ns)
                 self.assertEqual(rc, 0)
 
-            with mock.patch.dict(os.environ, {'JUNIE_HOME': str(home), 'JUNIE_SESSION_ID': 'session-live'}):
+            with mock.patch.dict(os.environ, {'JUNIE_HOME': str(home), 'JUNIE_SESSION_ID': 'session-live', 'AGENT_TARGET': 'junie'}):
                 ns = hm.build_parser().parse_args(['delete', 'session-live', 'session-old', '--yes'])
                 rc = hm.cmd_delete(ns)
                 self.assertEqual(rc, 0)
@@ -114,7 +114,7 @@ class HistmgrUnit(unittest.TestCase):
             (home / 'skills' / 'dev-project-todo-implement').mkdir(parents=True)
             (home / 'commands').mkdir(parents=True)
             (home / 'commands' / 'histmgr.md').write_text('x', encoding='utf-8')
-            with mock.patch.dict(os.environ, {'JUNIE_HOME': str(home)}):
+            with mock.patch.dict(os.environ, {'JUNIE_HOME': str(home), 'AGENT_TARGET': 'junie'}):
                 cands = [
                     {'suggested_name': 'dev-project-todo-implement', 'kind': 'skill'},
                     {'suggested_name': 'histmgr', 'kind': 'command'},
@@ -153,6 +153,114 @@ class HistmgrUnit(unittest.TestCase):
         self.assertEqual([r.session_id for r in out], ['a'])
         out = hm.apply_filters(rows, tag='terraform')
         self.assertEqual([r.session_id for r in out], ['b'])
+
+
+def _claude_record(**kw: object) -> str:
+    return json.dumps(kw) + '\n'
+
+
+class ClaudeBackendTests(unittest.TestCase):
+    """Claude Code history: projects/<cwd>/<id>.jsonl plus per-session sidecars."""
+
+    def _home(self, td: str) -> Path:
+        home = Path(td) / 'claude'
+        proj = home / 'projects' / '-tmp-demo'
+        proj.mkdir(parents=True)
+        (proj / 'memory').mkdir()
+        (proj / 'memory' / 'MEMORY.md').write_text('keep', encoding='utf-8')
+        for sid, title, prompt in (
+            ('11111111-aaaa', 'Fix kamailio pike config', 'tune kamailio pike'),
+            ('22222222-bbbb', None, 'implement todo-deadbeef from trackers/todo'),
+        ):
+            lines = _claude_record(type='user', sessionId=sid, cwd='/tmp/demo', timestamp='2026-10-01T10:00:00Z',
+                                   message={'role': 'user', 'content': prompt})
+            lines += _claude_record(type='user', isMeta=True, sessionId=sid, timestamp='2026-10-01T10:00:01Z',
+                                    message={'role': 'user', 'content': 'meta noise'})
+            lines += _claude_record(type='assistant', sessionId=sid, timestamp='2026-10-01T10:00:02Z',
+                                    message={'role': 'assistant', 'content': [
+                                        {'type': 'thinking', 'thinking': 'hidden'},
+                                        {'type': 'text', 'text': 'Done.'},
+                                        {'type': 'tool_use', 'name': 'Bash', 'input': {}}]})
+            if title:
+                lines += _claude_record(type='ai-title', sessionId=sid, aiTitle=title)
+            (proj / f'{sid}.jsonl').write_text(lines, encoding='utf-8')
+        (proj / '11111111-aaaa' / 'subagents').mkdir(parents=True)
+        (home / 'file-history' / '11111111-aaaa').mkdir(parents=True)
+        (home / 'session-env' / '11111111-aaaa').mkdir(parents=True)
+        return home
+
+    def test_load_rows_and_transcript(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            be = hm.ClaudeBackend(self._home(td))
+            rows = {r.session_id: r for r in be.load_rows()}
+            self.assertEqual(set(rows), {'11111111-aaaa', '22222222-bbbb'})
+            self.assertEqual(rows['11111111-aaaa'].task_name, 'Fix kamailio pike config')
+            self.assertEqual(rows['22222222-bbbb'].task_name, 'implement todo-deadbeef from trackers/todo')
+            self.assertEqual(rows['11111111-aaaa'].project_dir, '/tmp/demo')
+            text = hm.row_text(rows['11111111-aaaa'])
+            self.assertIn('tune kamailio pike', text)
+            self.assertIn('Done.', text)
+            self.assertNotIn('meta noise', text)
+            self.assertNotIn('hidden', text)
+            self.assertIn('kamailio', hm.detect_tags(rows['11111111-aaaa']))
+            self.assertIn('todo_implement', hm.detect_tags(rows['22222222-bbbb']))
+
+    def test_delete_removes_sidecars_keeps_memory_and_live(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            home = self._home(td)
+            proj = home / 'projects' / '-tmp-demo'
+            env = {'AGENT_TARGET': 'claude', 'CLAUDE_HOME': str(home), 'CLAUDE_CODE_SESSION_ID': '22222222-bbbb'}
+            with mock.patch.dict(os.environ, env):
+                with mock.patch('sys.stdout', new_callable=io.StringIO):
+                    rc = hm.main(['delete', '11111111-aaaa', '22222222-bbbb', '--yes'])
+            self.assertEqual(rc, 0)
+            self.assertFalse((proj / '11111111-aaaa.jsonl').exists())
+            self.assertFalse((proj / '11111111-aaaa').exists())
+            self.assertFalse((home / 'file-history' / '11111111-aaaa').exists())
+            self.assertFalse((home / 'session-env' / '11111111-aaaa').exists())
+            self.assertTrue((proj / '22222222-bbbb.jsonl').exists(), 'live session must remain')
+            self.assertTrue((proj / 'memory' / 'MEMORY.md').exists(), 'project memory must remain')
+
+    def test_list_json_via_main(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            home = self._home(td)
+            with mock.patch.dict(os.environ, {'CLAUDE_HOME': str(home)}):
+                with mock.patch('sys.stdout', new_callable=io.StringIO) as out:
+                    rc = hm.main(['--agent', 'claude', 'list', '--json', '-q', 'kamailio'])
+            self.assertEqual(rc, 0)
+            data = json.loads(out.getvalue())
+            self.assertEqual([d['sessionId'] for d in data], ['11111111-aaaa'])
+            self.assertEqual(data[0]['agent'], 'claude')
+
+
+class AgentResolutionTests(unittest.TestCase):
+    def test_unresolvable_agent_exits_2(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            env = {'JUNIE_HOME': str(Path(td) / 'j'), 'CLAUDE_HOME': str(Path(td) / 'c')}
+            (Path(td) / 'j').mkdir()
+            (Path(td) / 'c').mkdir()
+            clean = {k: v for k, v in os.environ.items()
+                     if k not in ('AGENT_TARGET', 'CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'JUNIE_SESSION_ID',
+                                  'JUNIE_SESSION', 'JUNIE_CURRENT_SESSION')}
+            clean.update(env)
+            with mock.patch.dict(os.environ, clean, clear=True):
+                with mock.patch('sys.stdin', new_callable=io.StringIO):
+                    with mock.patch('sys.stderr', new_callable=io.StringIO) as err:
+                        rc = hm.main(['list'])
+            self.assertEqual(rc, 2)
+            self.assertIn('--agent', err.getvalue())
+
+    def test_bad_agent_target_env(self) -> None:
+        with mock.patch.dict(os.environ, {'AGENT_TARGET': 'codex'}):
+            with mock.patch('sys.stderr', new_callable=io.StringIO) as err:
+                self.assertEqual(hm.main(['list']), 2)
+            self.assertIn('unknown agent', err.getvalue())
+
+    def test_check_args_accepts_agent_flag(self) -> None:
+        with mock.patch('sys.stdout', new_callable=io.StringIO) as out:
+            self.assertEqual(hm.main(['--check-args', '--agent', 'claude']), 0)
+        ns = json.loads(out.getvalue())
+        self.assertEqual((ns['agent'], ns['cmd']), ('claude', 'mine'))
 
 
 if __name__ == '__main__':

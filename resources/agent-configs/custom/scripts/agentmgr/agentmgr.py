@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """
-agentmgr — advanced Junie agent management CLI.
+agentmgr — coding-agent management CLI (Junie CLI, Claude Code).
 
 Inventory skills/commands/docs, pretty-print agent documentation, tune
 config/settings, scaffold decision-routing (SAD KITTI), validate skills,
 and test workflows (events audit + sadkitti scan/lint/graph).
+
+The target agent comes from --agent, AGENT_TARGET, the calling agent, the only
+installed agent, or an interactive prompt when run standalone in a terminal.
+tune, workflow and models are Junie-specific.
 """
 
 from __future__ import annotations
@@ -41,6 +45,7 @@ from lib.inventory import (  # noqa: E402
     status_snapshot,
 )
 from lib.paths import find_project_agents_roots, make_paths  # noqa: E402
+from agent_target import AGENT_NAMES, AgentSelectionError, resolve_agent  # noqa: E402  (lib.paths adds its dir)
 from lib.pretty import Style, bullet_list, header, hr, kv, table  # noqa: E402
 from lib import sadkitti as sk  # noqa: E402
 from lib.steer import (  # noqa: E402
@@ -64,7 +69,22 @@ def _style(args: argparse.Namespace) -> Style:
 
 
 def _paths(args: argparse.Namespace):
-    return make_paths(getattr(args, 'junie_home', None))
+    """Paths of the target agent (resolved in main; direct calls fall back to non-interactive resolution)."""
+    cached = getattr(args, 'paths', None)
+    if cached is not None:
+        return cached
+    agent = getattr(args, 'agent', None)
+    home = getattr(args, 'home', None)
+    junie = getattr(args, 'junie_home', None)
+    if junie and not agent:
+        agent, home = 'junie', junie
+    agent = resolve_agent(agent, interactive=False)
+    args.paths = make_paths(home or (junie if agent == 'junie' else None), agent)
+    return args.paths
+
+
+# Subcommands that read Junie-only state (config.json tuning, models/, events.jsonl).
+_JUNIE_ONLY = {'tune': 'config.json/models tuning', 'workflow': 'events.jsonl session audits', 'models': 'models/*.json'}
 
 
 def _print(text: str) -> int:
@@ -102,8 +122,10 @@ _SETTINGS_KEYS = (
 )
 
 
-def _infer_target(key: str) -> str:
-    """settings.json for known settings keys, config.json otherwise."""
+def _infer_target(key: str, agent: str = 'junie') -> str:
+    """Junie: settings.json for known settings keys, config.json otherwise. Claude Code: settings.json."""
+    if agent == 'claude':
+        return 'settings'
     return 'settings' if key.split('.', 1)[0] in _SETTINGS_KEYS else 'config'
 
 
@@ -135,23 +157,35 @@ def cmd_status(args: argparse.Namespace) -> int:
     if args.json:
         return _print(json.dumps(snap, indent=2, default=str))
     lines = [
-        header('Junie agent status', s),
+        header(f"{snap['label']} agent status", s),
         kv('home', snap['home'], s),
+        kv('entrypoint', snap['entrypoint'], s),
         kv('skills', f"{snap['skills']} ({snap['skills_with_skill_md']} with SKILL.md)", s),
-        kv('missing junie.md', snap['skills_missing_junie_agent'], s),
+        kv(f'missing {p.agent_doc}', snap['skills_missing_agent_doc'], s),
         kv('commands', snap['commands'], s),
-        kv('models', snap['models'], s),
+    ]
+    if p.agent == 'junie':
+        lines.append(kv('models', snap['models'], s))
+    lines += [
         kv('mcp servers', f"{snap['mcp_servers']} ({snap['mcp_enabled']} enabled-ish)", s),
         kv('sessions', snap['sessions'], s),
         hr(),
-        kv('provider', snap.get('provider'), s),
         kv('model', snap.get('model'), s),
-        kv('modelForLaunch', snap.get('modelForLaunch'), s),
-        kv('braveMode', snap.get('braveMode'), s),
-        kv('token-budget', snap.get('token_budget'), s),
-        kv('time-limit', snap.get('time_limit'), s),
-        kv('brave (config)', snap.get('brave_flag'), s),
     ]
+    if p.agent == 'junie':
+        lines += [
+            kv('provider', snap.get('provider'), s),
+            kv('modelForLaunch', snap.get('modelForLaunch'), s),
+            kv('braveMode', snap.get('braveMode'), s),
+            kv('token-budget', snap.get('token_budget'), s),
+            kv('time-limit', snap.get('time_limit'), s),
+            kv('brave (config)', snap.get('brave_flag'), s),
+        ]
+    else:
+        lines += [
+            kv('theme', snap.get('theme'), s),
+            kv('permissions mode', snap.get('permissions_mode'), s),
+        ]
     proj = find_project_agents_roots()
     lines.append(hr())
     lines.append(s.bold('Project AGENTS (cwd↑)'))
@@ -168,8 +202,8 @@ def cmd_paths(args: argparse.Namespace) -> int:
     s = _style(args)
     mapping = {
         'home': p.home,
-        'AGENTS.md': p.agents_md,
-        'config.json': p.config,
+        p.agents_md.name: p.agents_md,
+        **({'config.json': p.config} if p.agent == 'junie' else {}),
         'settings.json': p.settings,
         'skills/': p.skills,
         'commands/': p.commands,
@@ -177,16 +211,16 @@ def cmd_paths(args: argparse.Namespace) -> int:
         'custom/docs/': p.custom_docs,
         'sadkitti/': p.sadkitti,
         'scripts/': p.scripts,
-        'sessions/': p.sessions,
-        'mcp.json': p.mcp,
-        'models/': p.models,
+        f'{p.sessions.name}/': p.sessions,
+        p.mcp.name: p.mcp,
+        **({'models/': p.models} if p.agent == 'junie' else {}),
         'validate.py': p.validate_py,
         'skills-catalog': p.skills_catalog,
         'commands-catalog': p.commands_catalog,
     }
     if args.json:
         return _print(json.dumps({k: str(v) for k, v in mapping.items()}, indent=2))
-    lines = [header('Resolved Junie paths', s)]
+    lines = [header(f'Resolved {p.label} paths', s)]
     for k, v in mapping.items():
         mark = s.green('✓') if Path(v).exists() else s.red('✗')
         lines.append(f'{mark} {k:<18} {v}')
@@ -203,7 +237,7 @@ def cmd_inventory(args: argparse.Namespace) -> int:
         parts.append(render_commands_cards(paths=p, style=s))
     if args.what in ('all', 'skills'):
         parts.append(render_skills_cards(paths=p, style=s, limit=args.limit or 0))
-    if args.what in ('all', 'models'):
+    if args.what in ('all', 'models') and p.agent == 'junie':
         models = list_models(p)
         rows = []
         for m in models:
@@ -376,23 +410,22 @@ def _validate_skills(args: argparse.Namespace, p, s: Style) -> int:
 _EXAMPLE_TIMEOUT_S = 10
 
 
-def _resolve_command_script(script: str, home: Path) -> Path:
-    """Map the `~/.junie/...` tilde path from a command body onto the active Junie home."""
-    prefix = '~/.junie/'
-    if script.startswith(prefix):
-        return home / script[len(prefix):]
+def _resolve_command_script(script: str, home: Path, tilde_home: str = '~/.junie/') -> Path:
+    """Map the `~/.<agent>/...` tilde path from a command body onto the active agent home."""
+    if script.startswith(tilde_home):
+        return home / script[len(tilde_home):]
     return Path(script).expanduser()
 
 
-def _check_examples(script: str | None, examples: list[str], home: Path) -> list[dict]:
+def _check_examples(script: str | None, examples: list[str], home: Path, tilde_home: str = '~/.junie/') -> list[dict]:
     """Run `script --check-args <example>` per example in a scratch cwd; never touches real state."""
     results: list[dict] = []
     if not examples:
         return results
     if not script:
-        err = 'no python3 ~/.junie/custom/scripts/*.py line in body'
+        err = f'no python3 {tilde_home}custom/scripts/*.py line in body'
         return [{'text': ex, 'ok': False, 'error': err} for ex in examples]
-    path = _resolve_command_script(script, home)
+    path = _resolve_command_script(script, home, tilde_home)
     if not path.is_file():
         return [{'text': ex, 'ok': False, 'error': f'script not found: {path}'} for ex in examples]
     with tempfile.TemporaryDirectory(prefix='agentmgr-examples-') as td:
@@ -450,14 +483,14 @@ def cmd_commands(args: argparse.Namespace) -> int:
                     if any(x.lower() in ('arguments', 'args', 'argv') for x in c.required_placeholders):
                         entry['ok'] = False
                         entry['problems'].append('catch-all required placeholder without allowPromptArgument')
-                if args.action == 'lint' and not c.allow_prompt_argument and not c.required_placeholders:
+                if args.action == 'lint' and p.agent == 'junie' and not c.allow_prompt_argument and not c.required_placeholders:
                     entry['problems'].append(
                         'no args and allowPromptArgument false — bare /cmd works, but trailing text is dropped'
                     )
                 if args.action == 'lint' and args.examples:
                     if not c.examples:
                         entry['problems'].append('no ```text example block — examples not checked')
-                    checked = _check_examples(c.script, c.examples, p.home)
+                    checked = _check_examples(c.script, c.examples, p.home, p.tilde_home)
                     entry['examples'] = checked
                     for n, r in enumerate(checked, start=1):
                         if not r['ok']:
@@ -568,7 +601,9 @@ def cmd_config(args: argparse.Namespace) -> int:
             return _die('config set requires KEY VALUE')
         target = args.which if args.which in ('config', 'settings') else args.target
         if target not in ('config', 'settings'):
-            target = _infer_target(args.key)
+            target = _infer_target(args.key, p.agent)
+        if target == 'config' and p.agent != 'junie':
+            return _die(f'{p.label} has no config.json; use --which settings')
         try:
             value = coerce_value(args.value)
             result = apply_set(
@@ -652,7 +687,7 @@ def cmd_tune(args: argparse.Namespace) -> int:
         if not args.key or args.value is None:
             return _die('tune set requires KEY VALUE')
         key = args.key
-        target = _infer_target(key)
+        target = _infer_target(key, p.agent)
         try:
             value = coerce_value(args.value)
             result = apply_set(
@@ -698,7 +733,7 @@ def cmd_steer(args: argparse.Namespace) -> int:
             body = get_template(args.name)
         except KeyError:
             return _not_found('template', args.name, list_templates(), 'steer templates')
-        return _print(header(f'Template: {args.name}', s) + '\n' + body)
+        return _print(header(f'Template: {args.name}', s) + '\n' + body.replace('~/.junie/', p.tilde_home))
     if args.action == 'scan':
         roots = [Path(args.root)] if args.root else default_scan_roots(p)
         blocks = []
@@ -721,7 +756,7 @@ def cmd_steer(args: argparse.Namespace) -> int:
             return _die(str(exc))
         if args.write:
             print(f'Wrote {out}', file=sys.stderr)
-        return _print(body)
+        return _print(body.replace('~/.junie/', p.tilde_home))
     return _die(f'unknown steer action: {args.action}')
 
 
@@ -813,8 +848,11 @@ def cmd_test(args: argparse.Namespace) -> int:
     edge_count = sum(len(v) for v in graph.values())
     lines.append(kv('graph edges', edge_count, s))
 
-    # 4) optional workflow audit
-    if args.events:
+    # 4) optional workflow audit (Junie events.jsonl only)
+    if args.events and p.agent != 'junie':
+        lines.append(hr())
+        lines.append(s.yellow(f'workflow audit skipped: --events is Junie-specific ({p.label} selected)'))
+    elif args.events:
         lines.append(hr())
         lines.append(s.bold('workflow audit'))
         try:
@@ -885,7 +923,7 @@ def cmd_models(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog='agentmgr',
-        description='Advanced Junie agent management (docs, tune, steer, workflow tests).',
+        description='Coding-agent management for Junie CLI and Claude Code (docs, skills, commands, config, steer, tests).',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='''
 Examples:
@@ -902,9 +940,17 @@ Examples:
   agentmgr sadkitti graph ~/.junie --mermaid
   agentmgr workflow audit latest --mermaid
   agentmgr test --directory ~/.junie/custom/docs --events latest
+  agentmgr --agent claude status
+  agentmgr --agent claude commands lint --examples
+
+Target agent: --agent, else AGENT_TARGET, else the calling agent, else the only
+installed one, else an interactive prompt (terminal); otherwise exit 2.
+tune, workflow and models are Junie-specific.
 ''',
     )
-    parser.add_argument('--junie-home', default=None, help='Override JUNIE_HOME (default ~/.junie)')
+    parser.add_argument('--agent', default=None, choices=AGENT_NAMES, help='Agent to manage (default: auto)')
+    parser.add_argument('--home', default=None, help="Override the selected agent's home")
+    parser.add_argument('--junie-home', default=None, help='Override JUNIE_HOME (default ~/.junie); implies --agent junie')
     parser.add_argument('--json', action='store_true', help='JSON output where supported')
     parser.add_argument('--no-color', action='store_true')
     parser.add_argument('--color', action='store_true')
@@ -915,7 +961,9 @@ Examples:
     )
 
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument('--junie-home', default=argparse.SUPPRESS, help='Override JUNIE_HOME (default ~/.junie)')
+    common.add_argument('--agent', default=argparse.SUPPRESS, choices=AGENT_NAMES, help='Agent to manage (default: auto)')
+    common.add_argument('--home', default=argparse.SUPPRESS, help="Override the selected agent's home")
+    common.add_argument('--junie-home', default=argparse.SUPPRESS, help='Override JUNIE_HOME (default ~/.junie); implies --agent junie')
     common.add_argument('--json', action='store_true', default=argparse.SUPPRESS, help='JSON output where supported')
     common.add_argument('--no-color', action='store_true', default=argparse.SUPPRESS)
     common.add_argument('--color', action='store_true', default=argparse.SUPPRESS)
@@ -1101,7 +1149,7 @@ def _normalize_argv(argv: Sequence[str] | None) -> list[str]:
     else:
         argv_list = list(argv)
     # Strip global flags; if no subcommand token remains, inject default.
-    globals_with_val = {'--junie-home'}
+    globals_with_val = {'--junie-home', '--agent', '--home'}
     globals_bool = {'--json', '--no-color', '--color', '--check-args', '-h', '--help'}
     i = 0
     saw_cmd = False
@@ -1115,7 +1163,7 @@ def _normalize_argv(argv: Sequence[str] | None) -> list[str]:
         if tok in globals_with_val:
             i += 2
             continue
-        if tok.startswith('--junie-home='):
+        if any(tok.startswith(f'{g}=') for g in globals_with_val):
             i += 1
             continue
         saw_cmd = True
@@ -1131,6 +1179,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.check_args:
         print(json.dumps({k: v for k, v in vars(args).items() if k != 'func'}, default=str))
         return 0
+    agent, home = args.agent, args.home
+    if args.junie_home and not agent:
+        agent, home = 'junie', args.junie_home
+    elif args.junie_home and agent == 'junie' and not home:
+        home = args.junie_home
+    try:
+        agent = resolve_agent(agent, purpose=f'agentmgr {args.cmd}')
+    except AgentSelectionError as exc:
+        return _die(f'agentmgr: {exc}')
+    if agent != 'junie' and args.cmd in _JUNIE_ONLY:
+        return _die(f'agentmgr {args.cmd} is Junie-specific ({_JUNIE_ONLY[args.cmd]}); not available for --agent {agent}')
+    args.agent = agent
+    args.paths = make_paths(home, agent)
     try:
         return int(args.func(args) or 0)
     except BrokenPipeError:

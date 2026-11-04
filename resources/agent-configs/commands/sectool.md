@@ -1,15 +1,16 @@
 ---
-description: "Run junie security tools (audit, review, remediate, refactor)"
+description: "Run IaC/GCP security tools (audit, review, remediate, refactor)"
 allowPromptArgument: true
+argument-hint: "[audit|review|remediate|refactor] [args...]"
 ---
 
 EXECUTE IMMEDIATELY — one shell call. No planning, repo exploration or guideline loading.
 
 ```bash
-python3 ~/.junie/custom/scripts/sectools/sectool.py $prompt
+python3 {{agent_home}}/custom/scripts/sectools/sectool.py {{args}}
 ```
 
-- Bare `/sectool` → lists tools. First token is the tool (`audit|review|remediate|refactor`), the rest are tool args. Pass `$prompt` through **unchanged**; bare tool name → its `--help`.
+- Bare `/sectool` → lists tools. First token is the tool (`audit|review|remediate|refactor`), the rest are tool args. Pass the arguments through **unchanged**; bare tool name → its `--help`. Works the same from any agent (no agent-specific state).
 - If the script exits 2 (usage error, e.g. natural-language input or a path argument): run `... sectool.py <tool> --help`, map the request onto real flags using the table below, echo the resolved command, run once more. Never guess `--apply`/`--skip-all`.
 - Summarize findings by severity; bulky output → `/tmp/sectool-*.log`. Redact secrets. No git commit.
 

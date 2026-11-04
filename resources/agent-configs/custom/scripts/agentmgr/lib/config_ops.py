@@ -129,6 +129,42 @@ def show_config(paths: JuniePaths | None = None, which: str = 'both') -> dict[st
     return out
 
 
+# Claude Code ~/.claude/settings.json keys agentmgr may write without --force.
+CLAUDE_SETTINGS_SETTABLE = {
+    'model',
+    'modelSettings',
+    'theme',
+    'outputStyle',
+    'permissions',
+    'sandbox',
+    'env',
+    'hooks',
+    'statusLine',
+    'cleanupPeriodDays',
+    'desktopSessionCleanupPeriodDays',
+    'autoCompactEnabled',
+    'autoUpdatesChannel',
+    'minimumVersion',
+    'preferredNotifChannel',
+    'enableAllProjectMcpServers',
+    'enabledMcpjsonServers',
+    'disabledMcpjsonServers',
+    'includeCoAuthoredBy',
+    'alwaysThinkingEnabled',
+    'spinnerTipsEnabled',
+}
+# Credential helpers and locally managed blocks: never written without --force.
+CLAUDE_PROTECTED_SETTINGS = {
+    'apiKeyHelper',
+    'awsAuthRefresh',
+    'awsCredentialExport',
+    'gcpAuthRefresh',
+    'forceLoginMethod',
+    'forceLoginOrgUUID',
+    'autoMode',
+}
+
+
 def apply_set(
     target: str,
     key: str,
@@ -150,8 +186,12 @@ def apply_set(
         protected: set[str] = set()
     elif target == 'settings':
         path = p.settings
-        allowed = SETTINGS_SETTABLE
-        protected = PROTECTED_SETTINGS
+        if getattr(p, 'agent', 'junie') == 'claude':
+            allowed = CLAUDE_SETTINGS_SETTABLE
+            protected = CLAUDE_PROTECTED_SETTINGS
+        else:
+            allowed = SETTINGS_SETTABLE
+            protected = PROTECTED_SETTINGS
     else:
         raise ValueError(f'unknown target: {target}')
 

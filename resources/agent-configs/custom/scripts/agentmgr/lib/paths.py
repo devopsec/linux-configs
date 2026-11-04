@@ -1,31 +1,52 @@
-"""Resolve Junie home paths and optional project agent roots."""
+"""Resolve agent home paths (Junie CLI, Claude Code) and optional project agent roots."""
 
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+# agent_target.py lives in custom/scripts/, two levels above this package.
+_SCRIPTS = Path(__file__).resolve().parent.parent.parent
+if str(_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS))
+from agent_target import AGENTS, agent_home  # noqa: E402
+
 
 def junie_home(explicit: str | Path | None = None) -> Path:
-    if explicit:
-        return Path(explicit).expanduser().resolve()
-    env = os.environ.get('JUNIE_HOME')
-    if env:
-        return Path(env).expanduser().resolve()
-    return (Path.home() / '.junie').resolve()
+    return agent_home('junie', explicit)
 
 
 @dataclass(frozen=True)
-class JuniePaths:
+class AgentPaths:
+    """Paths inside one agent's home. Layout is shared; entrypoint/config/MCP/sessions differ."""
+
     home: Path
+    agent: str = 'junie'
+
+    @property
+    def label(self) -> str:
+        return AGENTS[self.agent].label
+
+    @property
+    def tilde_home(self) -> str:
+        """Home as written in docs and command bodies, e.g. ``~/.junie/``."""
+        return AGENTS[self.agent].default_home.rstrip('/') + '/'
+
+    @property
+    def agent_doc(self) -> str:
+        """Per-agent skill doc file under ``<skill>/agents/``."""
+        return f'{self.agent}.md'
 
     @property
     def agents_md(self) -> Path:
-        return self.home / 'AGENTS.md'
+        """Global instruction entrypoint: AGENTS.md (Junie) or CLAUDE.md (Claude Code)."""
+        return self.home / ('CLAUDE.md' if self.agent == 'claude' else 'AGENTS.md')
 
     @property
     def config(self) -> Path:
+        """Junie's config.json; Claude Code has none (settings.json only), so this never exists there."""
         return self.home / 'config.json'
 
     @property
@@ -63,10 +84,16 @@ class JuniePaths:
 
     @property
     def sessions(self) -> Path:
-        return self.home / 'sessions'
+        """Junie: sessions/<id>/; Claude Code: projects/<encoded-cwd>/<id>.jsonl."""
+        return self.home / ('projects' if self.agent == 'claude' else 'sessions')
 
     @property
     def mcp(self) -> Path:
+        """Junie: mcp/mcp.json. Claude Code: ~/.claude.json (user-scope servers) for the default
+        home, or <home>/.claude.json when the home is relocated (CLAUDE_CONFIG_DIR layout)."""
+        if self.agent == 'claude':
+            default = Path(AGENTS['claude'].default_home).expanduser().resolve()
+            return self.home.parent / '.claude.json' if self.home == default else self.home / '.claude.json'
         return self.home / 'mcp' / 'mcp.json'
 
     @property
@@ -94,8 +121,12 @@ class JuniePaths:
         return self.custom_docs / 'general-guidelines.md'
 
 
-def make_paths(home: str | Path | None = None) -> JuniePaths:
-    return JuniePaths(home=junie_home(home))
+# Backwards-compatible name.
+JuniePaths = AgentPaths
+
+
+def make_paths(home: str | Path | None = None, agent: str = 'junie') -> AgentPaths:
+    return AgentPaths(home=agent_home(agent, home), agent=agent)
 
 
 def find_project_agents_roots(start: Path | None = None) -> list[Path]:

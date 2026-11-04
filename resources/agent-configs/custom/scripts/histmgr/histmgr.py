@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """
-histmgr — Junie session history manager / skill-miner helper.
+histmgr — coding-agent session history manager / skill-miner helper.
 
-Catalog, filter, mine reusable workflows from ~/.junie/sessions, and
-optionally delete sessions. Designed for agent + human use (arg-based;
-interactive prompts when stdin is a TTY and flags omit choices).
+Catalog, filter, mine reusable workflows from agent session history, and
+optionally delete sessions. Supports Junie CLI (~/.junie/sessions) and Claude
+Code (~/.claude/projects/*/<session>.jsonl); pick one with --agent, AGENT_TARGET,
+or the interactive prompt when run standalone in a terminal. Designed for agent
++ human use (arg-based; interactive prompts when stdin is a TTY and flags omit
+choices).
 """
 
 from __future__ import annotations
@@ -21,9 +24,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from agent_target import AGENT_NAMES, AgentSelectionError, agent_home, resolve_agent  # noqa: E402
+
 DEFAULT_JUNIE_HOME = Path(os.environ.get('JUNIE_HOME', Path.home() / '.junie'))
 SESSIONS_DIRNAME = 'sessions'
 INDEX_NAME = 'index.jsonl'
+CLAUDE_PROJECTS_DIRNAME = 'projects'
+# Claude Code keeps per-session state under these home subdirectories, keyed by session id.
+CLAUDE_SESSION_SIDECARS = ('file-history', 'session-env')
+_SESSION_ID_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]*$')
 
 # Recurring workflow detectors → candidate skill/command names
 # id, kind(skill|command|either), suggested_name, regex
@@ -48,7 +58,7 @@ PATTERN_RULES: list[tuple[str, str, str, re.Pattern[str]]] = [
     ('docs_update', 'skill', 'docs-project-documentation-update',
      re.compile(r'update the readme|organize.*documentation|outdated docs|documentation drift|sync readme', re.I)),
     ('skill_author', 'skill', 'dev-agents-skill-create',
-     re.compile(r'create a skill|agent skill|~/.junie/skills|update.*skill', re.I)),
+     re.compile(r'create a skill|agent skill|~/\.(junie|claude)/skills|update.*skill', re.I)),
     ('session_mine', 'command', 'histmgr',
      re.compile(r'session history|reusable (logic|workflow)|skill.?mine|/histmgr', re.I)),
     ('sectool', 'command', 'sectool',
@@ -91,6 +101,7 @@ class SessionRow:
     transcript_size: int = 0
     path: Path | None = None
     tags: list[str] = field(default_factory=list)
+    agent: str = 'junie'
 
     @property
     def sort_ts(self) -> int:
@@ -212,6 +223,286 @@ def read_transcript_head(path: Path | None, limit: int = 8000) -> str:
         return ''
 
 
+# ── Claude Code sessions (~/.claude/projects/<encoded-cwd>/<session-id>.jsonl) ──
+
+
+def _iso_ms(value: Any) -> int | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return int(datetime.fromisoformat(value.replace('Z', '+00:00')).timestamp() * 1000)
+    except ValueError:
+        return None
+
+
+def _claude_text(content: Any) -> str:
+    """Plain text of a message: strings and text blocks; tool calls/results and thinking skipped."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = [b.get('text', '') for b in content if isinstance(b, dict) and b.get('type') == 'text']
+        return '\n'.join(p for p in parts if p)
+    return ''
+
+
+def claude_transcript(path: Path | None, limit: int | None = 8000) -> str:
+    """User/assistant text of a Claude session file as markdown-ish text, up to ``limit`` chars."""
+    if not path or not path.is_file():
+        return ''
+    out: list[str] = []
+    size = 0
+    try:
+        with path.open(encoding='utf-8', errors='replace') as fh:
+            for line in fh:
+                # cheap prefilter before parsing; the parsed record is checked below
+                if '"user"' not in line and '"assistant"' not in line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if obj.get('type') not in ('user', 'assistant') or obj.get('isMeta') or obj.get('isSidechain'):
+                    continue
+                text = _claude_text((obj.get('message') or {}).get('content')).strip()
+                if not text:
+                    continue
+                chunk = f'## {obj.get("type")}\n{text}\n\n'
+                out.append(chunk)
+                size += len(chunk)
+                if limit is not None and size >= limit:
+                    break
+    except OSError:
+        return ''
+    text = ''.join(out)
+    return text[:limit] if limit is not None else text
+
+
+def load_claude_session(path: Path) -> SessionRow:
+    """Metadata of one Claude session file without parsing every record."""
+    created: int | None = None
+    cwd: str | None = None
+    title: str | None = None
+    first_prompt: str | None = None
+    try:
+        with path.open(encoding='utf-8', errors='replace') as fh:
+            for line in fh:
+                if '"ai-title"' in line:
+                    try:
+                        title = json.loads(line).get('aiTitle') or title
+                    except json.JSONDecodeError:
+                        pass
+                    continue
+                if (created is None or cwd is None or first_prompt is None) and '"timestamp"' in line:
+                    try:
+                        obj = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    created = created or _iso_ms(obj.get('timestamp'))
+                    cwd = cwd or obj.get('cwd')
+                    if first_prompt is None and obj.get('type') == 'user' and not obj.get('isMeta'):
+                        text = _claude_text((obj.get('message') or {}).get('content')).strip()
+                        if text and not text.startswith('<'):
+                            first_prompt = text.splitlines()[0][:120]
+        st = path.stat()
+        updated = int(st.st_mtime * 1000)
+        size = st.st_size
+    except OSError:
+        updated, size = None, 0
+    return SessionRow(
+        session_id=path.stem,
+        task_name=title or first_prompt,
+        project_dir=cwd,
+        status=None,
+        created_at=created,
+        updated_at=updated,
+        transcript_size=size,
+        path=path,
+        agent='claude',
+    )
+
+
+def row_text(row: SessionRow, limit: int = 8000) -> str:
+    """Transcript head for filtering/mining, whatever agent the row came from."""
+    if row.agent == 'claude':
+        return claude_transcript(row.path, limit)
+    return read_transcript_head(row.path, limit)
+
+
+def _pid_alive(pid: Any) -> bool:
+    try:
+        os.kill(int(pid), 0)
+    except (OSError, ValueError, TypeError):
+        return False
+    return True
+
+
+class JunieBackend:
+    """Junie CLI: sessions/<id>/transcript.md plus sessions/index.jsonl."""
+
+    name = 'junie'
+
+    def __init__(self, home: Path) -> None:
+        self.home = home
+
+    @property
+    def root(self) -> Path:
+        return self.home / SESSIONS_DIRNAME
+
+    def load_rows(self) -> list[SessionRow]:
+        return load_index(self.root)
+
+    def find(self, sid: str) -> tuple[SessionRow, dict[str, Any]] | None:
+        path = _safe_session_dir(self.root, sid)
+        if path is None or not path.is_dir():
+            return None
+        meta: dict[str, Any] = {'sessionId': sid}
+        index = self.root / INDEX_NAME
+        if index.is_file():
+            with index.open(encoding='utf-8', errors='replace') as fh:
+                for line in fh:
+                    try:
+                        obj = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if obj.get('sessionId') == sid:
+                        meta = obj
+                        break
+        row = SessionRow(
+            session_id=sid,
+            task_name=meta.get('taskName'),
+            project_dir=meta.get('projectDir'),
+            status=meta.get('status'),
+            created_at=meta.get('createdAt'),
+            updated_at=meta.get('updatedAt'),
+            path=path,
+        )
+        return row, meta
+
+    def transcript(self, row: SessionRow) -> tuple[Path | None, str | None]:
+        t = row.path / 'transcript.md' if row.path else None
+        if t is None or not t.is_file():
+            return t, None
+        return t, t.read_text(encoding='utf-8', errors='replace')
+
+    def current_ids(self) -> set[str]:
+        return current_session_ids()
+
+    def all_ids(self) -> list[str]:
+        ids = [r.session_id for r in self.load_rows()]
+        if self.root.is_dir():
+            ids.extend(sorted(p.name for p in self.root.iterdir() if p.is_dir() and p.name.startswith('session-')))
+        return ids
+
+    def paths_for(self, sid: str) -> list[Path]:
+        p = _safe_session_dir(self.root, sid)
+        return [p] if p is not None and p.exists() else []
+
+    def finish_delete(self, ids: set[str]) -> None:
+        remove_from_index(self.root, ids)
+        print('index.jsonl updated')
+
+
+class ClaudeBackend:
+    """Claude Code: projects/<encoded-cwd>/<id>.jsonl (+ <id>/ sidecar, file-history/<id>, session-env/<id>)."""
+
+    name = 'claude'
+
+    def __init__(self, home: Path) -> None:
+        self.home = home
+
+    @property
+    def root(self) -> Path:
+        return self.home / CLAUDE_PROJECTS_DIRNAME
+
+    def _files(self) -> list[Path]:
+        if not self.root.is_dir():
+            return []
+        return sorted(f for d in self.root.iterdir() if d.is_dir() for f in d.glob('*.jsonl'))
+
+    def load_rows(self) -> list[SessionRow]:
+        rows = [load_claude_session(f) for f in self._files()]
+        rows.sort(key=lambda r: r.sort_ts, reverse=True)
+        return rows
+
+    def _file_for(self, sid: str) -> Path | None:
+        if not _SESSION_ID_RE.match(sid or ''):
+            return None
+        matches = [f for f in self._files() if f.stem == sid]
+        return matches[0] if matches else None
+
+    def find(self, sid: str) -> tuple[SessionRow, dict[str, Any]] | None:
+        f = self._file_for(sid)
+        if f is None:
+            return None
+        row = load_claude_session(f)
+        meta = {
+            'sessionId': sid,
+            'taskName': row.task_name,
+            'projectDir': row.project_dir,
+            'createdAt': row.created_at,
+            'updatedAt': row.updated_at,
+            'file': str(f),
+        }
+        return row, meta
+
+    def transcript(self, row: SessionRow) -> tuple[Path | None, str | None]:
+        if not row.path or not row.path.is_file():
+            return row.path, None
+        return row.path, claude_transcript(row.path, None)
+
+    def current_ids(self) -> set[str]:
+        found: set[str] = set()
+        live = os.environ.get('CLAUDE_CODE_SESSION_ID')
+        if live:
+            found.add(live)
+        # Running Claude Code processes register themselves in ~/.claude/sessions/<pid>.json.
+        reg = self.home / 'sessions'
+        if reg.is_dir():
+            for f in reg.glob('*.json'):
+                try:
+                    obj = json.loads(f.read_text(encoding='utf-8'))
+                except (OSError, json.JSONDecodeError):
+                    continue
+                if obj.get('sessionId') and _pid_alive(obj.get('pid')):
+                    found.add(str(obj['sessionId']))
+        return found
+
+    def all_ids(self) -> list[str]:
+        return [f.stem for f in self._files()]
+
+    def paths_for(self, sid: str) -> list[Path]:
+        f = self._file_for(sid)
+        if f is None:
+            return []
+        out = [f]
+        sidecar = f.parent / sid  # subagents/, tool-results/ — never the project's memory/
+        if sidecar.is_dir() and sidecar.name == sid:
+            out.append(sidecar)
+        for sub in CLAUDE_SESSION_SIDECARS:
+            extra = self.home / sub / sid
+            if extra.exists():
+                out.append(extra)
+        return out
+
+    def finish_delete(self, ids: set[str]) -> None:
+        return None
+
+
+def make_backend(agent: str, home: str | Path | None = None) -> JunieBackend | ClaudeBackend:
+    resolved = agent_home(agent, home)
+    return ClaudeBackend(resolved) if agent == 'claude' else JunieBackend(resolved)
+
+
+def _backend(args: argparse.Namespace) -> JunieBackend | ClaudeBackend:
+    """Backend for this invocation (resolved once in main, or here for direct cmd_* calls)."""
+    be = getattr(args, 'backend', None)
+    if be is None:
+        agent = resolve_agent(getattr(args, 'agent', None), interactive=False)
+        be = make_backend(agent, getattr(args, 'home', None))
+        args.backend = be
+    return be
+
+
 def _compile_query(query: str) -> re.Pattern[str]:
     try:
         return re.compile(query, re.I)
@@ -254,7 +545,7 @@ def apply_filters(
             if q.search(blob):
                 filtered.append(r)
                 continue
-            head = read_transcript_head(r.path, 4000)
+            head = row_text(r, 4000)
             if head and q.search(head):
                 filtered.append(r)
         out = filtered
@@ -282,25 +573,26 @@ def apply_filters(
 
 
 def detect_tags(row: SessionRow) -> list[str]:
-    blob = f'{row.task_name or ""}\n{read_transcript_head(row.path, 6000)}'
+    blob = f'{row.task_name or ""}\n{row_text(row, 6000)}'
     tags = [pid for pid, _kind, _name, cre in PATTERN_RULES if cre.search(blob)]
     return tags or ['other']
 
 
-def existing_artifacts() -> tuple[set[str], set[str]]:
+def existing_artifacts(home: Path | None = None) -> tuple[set[str], set[str]]:
+    home = home or junie_home()
     skills: set[str] = set()
     commands: set[str] = set()
-    skills_dir = junie_home() / 'skills'
+    skills_dir = home / 'skills'
     if skills_dir.is_dir():
         skills = {p.name for p in skills_dir.iterdir() if p.is_dir()}
-    commands_dir = junie_home() / 'commands'
+    commands_dir = home / 'commands'
     if commands_dir.is_dir():
         commands = {p.stem for p in commands_dir.glob('*.md')}
     return skills, commands
 
 
-def annotate_existence(candidates: list[dict[str, Any]]) -> None:
-    skills, commands = existing_artifacts()
+def annotate_existence(candidates: list[dict[str, Any]], home: Path | None = None) -> None:
+    skills, commands = existing_artifacts(home)
     for c in candidates:
         name = c['suggested_name']
         kind = c['kind']
@@ -314,9 +606,10 @@ def annotate_existence(candidates: list[dict[str, Any]]) -> None:
 
 
 def cmd_list(args: argparse.Namespace) -> int:
-    root = sessions_root()
+    be = _backend(args)
+    root = be.root
     rows = apply_filters(
-        load_index(root),
+        be.load_rows(),
         project=args.project,
         query=args.query,
         since=args.since,
@@ -337,6 +630,7 @@ def cmd_list(args: argparse.Namespace) -> int:
                 'when': r.when(),
                 'transcriptBytes': r.transcript_size,
                 'tags': r.tags or detect_tags(r),
+                'agent': r.agent,
             }
             for r in rows
         ]
@@ -344,7 +638,7 @@ def cmd_list(args: argparse.Namespace) -> int:
         print()
         return 0
 
-    print(f'sessions_root={root}  count={len(rows)}')
+    print(f'agent={be.name}  sessions_root={root}  count={len(rows)}')
     print(f'{"WHEN":<16} {"KB":>5}  {"SESSION_ID":<32}  PROJECT  TASK')
     for r in rows:
         proj = (r.project_dir or '').replace(str(Path.home()), '~')
@@ -356,47 +650,27 @@ def cmd_list(args: argparse.Namespace) -> int:
 
 
 def cmd_show(args: argparse.Namespace) -> int:
-    root = sessions_root()
+    be = _backend(args)
     sid = args.session_id
-    path = root / sid
-    if not path.is_dir():
-        print(f'Session not found: {sid}', file=sys.stderr)
+    found = be.find(sid)
+    if found is None:
+        print(f'Session not found: {sid} (agent={be.name}, root={be.root})', file=sys.stderr)
         return 1
-    meta: dict[str, Any] = {'sessionId': sid}
-    index = root / INDEX_NAME
-    if index.is_file():
-        with index.open(encoding='utf-8', errors='replace') as fh:
-            for line in fh:
-                try:
-                    obj = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if obj.get('sessionId') == sid:
-                    meta = obj
-                    break
-    row = SessionRow(
-        session_id=sid,
-        task_name=meta.get('taskName'),
-        project_dir=meta.get('projectDir'),
-        status=meta.get('status'),
-        created_at=meta.get('createdAt'),
-        updated_at=meta.get('updatedAt'),
-        path=path,
-    )
+    row, meta = found
+    meta['agent'] = be.name
     meta['tags'] = detect_tags(row)
     meta['when'] = row.when()
     print(json.dumps(meta, indent=2))
-    t = path / 'transcript.md'
-    if args.transcript and t.is_file():
-        text = t.read_text(encoding='utf-8', errors='replace')
+    t, text = be.transcript(row)
+    if args.transcript and text is not None:
         if args.max_chars and len(text) > args.max_chars:
             print(text[: args.max_chars])
             print(f'\n… truncated at {args.max_chars} chars')
         else:
             print(text)
     else:
-        size = t.stat().st_size if t.is_file() else 0
-        print(f'transcript: {t if t.is_file() else "missing"} size={size}')
+        size = t.stat().st_size if t is not None and t.is_file() else 0
+        print(f'transcript: {t if t is not None and t.is_file() else "missing"} size={size}')
     return 0
 
 
@@ -411,7 +685,7 @@ def mine_candidates(rows: list[SessionRow]) -> list[dict[str, Any]]:
             'examples': [],
         }
     for r in rows:
-        blob = f'{r.task_name or ""}\n{read_transcript_head(r.path, 6000)}'
+        blob = f'{r.task_name or ""}\n{row_text(r, 6000)}'
         for pid, _kind, _name, cre in PATTERN_RULES:
             if cre.search(blob):
                 b = buckets[pid]
@@ -429,19 +703,21 @@ def mine_candidates(rows: list[SessionRow]) -> list[dict[str, Any]]:
     return [b for b in ranked if b['count'] > 0]
 
 
-def _selection_payload(selected: list[dict[str, Any]], guidance: str) -> dict[str, Any]:
+def _selection_payload(selected: list[dict[str, Any]], guidance: str, agent: str = 'junie') -> dict[str, Any]:
     return {
         'selected': selected,
         'guidance': guidance,
+        'agent': agent,
         'instruction': (
             'Create or update the selected agent skills/commands using '
-            'dev-agents-skill-create for skills and ~/.junie/commands/<name>.md for commands. '
+            f'dev-agents-skill-create for skills and ~/.{agent}/commands/<name>.md for commands '
+            '(in the linux-configs repo: resources/agent-configs/commands/, synced to every agent). '
             'Honor optional guidance. Do not overwrite without explicit approval.'
         ),
     }
 
 
-def interactive_choose(candidates: list[dict[str, Any]], guidance: str) -> int:
+def interactive_choose(candidates: list[dict[str, Any]], guidance: str, agent: str = 'junie') -> int:
     print('Interactive select — one line per batch; empty line finishes.')
     print('Format: <num>[,num…] [skill|command]  optional notes after #')
     selected: list[dict[str, Any]] = []
@@ -481,7 +757,7 @@ def interactive_choose(candidates: list[dict[str, Any]], guidance: str) -> int:
         print('No selection.')
         return 0
     g = ' | '.join(x for x in [guidance, *notes_acc] if x)
-    payload = _selection_payload(selected, g)
+    payload = _selection_payload(selected, g, agent)
     out = Path('/tmp') / f'histmgr-selection-{os.getpid()}.json'
     out.write_text(json.dumps(payload, indent=2), encoding='utf-8')
     print(json.dumps(payload, indent=2))
@@ -490,9 +766,10 @@ def interactive_choose(candidates: list[dict[str, Any]], guidance: str) -> int:
 
 
 def cmd_mine(args: argparse.Namespace) -> int:
-    root = sessions_root()
+    be = _backend(args)
+    root = be.root
     rows = apply_filters(
-        load_index(root),
+        be.load_rows(),
         project=args.project,
         query=args.query,
         since=args.since,
@@ -503,7 +780,7 @@ def cmd_mine(args: argparse.Namespace) -> int:
         limit=None,
     )
     candidates = mine_candidates(rows)
-    annotate_existence(candidates)
+    annotate_existence(candidates, be.home)
     if args.min_hits and args.min_hits > 1:
         candidates = [c for c in candidates if c['count'] >= args.min_hits]
     if args.exclude_existing:
@@ -514,11 +791,15 @@ def cmd_mine(args: argparse.Namespace) -> int:
     guidance = args.guidance or ''
 
     if args.json:
-        json.dump({'candidates': candidates, 'guidance': guidance, 'session_count': len(rows)}, sys.stdout, indent=2)
+        json.dump(
+            {'agent': be.name, 'candidates': candidates, 'guidance': guidance, 'session_count': len(rows)},
+            sys.stdout,
+            indent=2,
+        )
         print()
         return 0
 
-    print(f'Mined {len(candidates)} candidate patterns from {len(rows)} sessions ({root})')
+    print(f'Mined {len(candidates)} candidate patterns from {len(rows)} {be.name} sessions ({root})')
     if guidance:
         print(f'Extra guidance: {guidance}')
     print()
@@ -532,7 +813,7 @@ def cmd_mine(args: argparse.Namespace) -> int:
     print('  histmgr mine --json …')
     print("  histmgr choose --ids 1,3 --as skill --guidance '…'")
     if sys.stdin.isatty() and not args.no_interactive:
-        return interactive_choose(candidates, guidance)
+        return interactive_choose(candidates, guidance, be.name)
     return 0
 
 
@@ -545,9 +826,9 @@ def cmd_choose(args: argparse.Namespace) -> int:
             print('Invalid --from-json: expected candidates list', file=sys.stderr)
             return 1
     else:
-        root = sessions_root()
+        be = _backend(args)
         rows = apply_filters(
-            load_index(root),
+            be.load_rows(),
             project=args.project,
             query=args.query,
             since=args.since,
@@ -558,7 +839,7 @@ def cmd_choose(args: argparse.Namespace) -> int:
             limit=None,
         )
         candidates = mine_candidates(rows)
-        annotate_existence(candidates)
+        annotate_existence(candidates, be.home)
 
     ids: list[int] = []
     for tok in (args.ids or '').split(','):
@@ -585,7 +866,8 @@ def cmd_choose(args: argparse.Namespace) -> int:
         print('No matching candidates for --ids', file=sys.stderr)
         return 1
     guidance = args.guidance or ''
-    payload = _selection_payload(selected, guidance)
+    agent = data.get('agent', 'junie') if args.from_json and isinstance(data, dict) else _backend(args).name
+    payload = _selection_payload(selected, guidance, agent)
     print(json.dumps(payload, indent=2))
     if args.write:
         Path(args.write).write_text(json.dumps(payload, indent=2), encoding='utf-8')
@@ -633,7 +915,8 @@ def _safe_session_dir(root: Path, sid: str) -> Path | None:
 
 
 def cmd_delete(args: argparse.Namespace) -> int:
-    root = sessions_root()
+    be = _backend(args)
+    root = be.root
     targets: list[str] = list(args.session_ids or [])
     filter_active = any(
         [
@@ -649,7 +932,7 @@ def cmd_delete(args: argparse.Namespace) -> int:
     )
     if filter_active:
         rows = apply_filters(
-            load_index(root),
+            be.load_rows(),
             project=args.project,
             query=args.filter_query or args.query,
             since=args.since,
@@ -661,13 +944,9 @@ def cmd_delete(args: argparse.Namespace) -> int:
         )
         targets.extend(r.session_id for r in rows)
     elif not targets:
-        # No ids and no filters: default to ALL sessions (index + on-disk dirs).
-        targets.extend(r.session_id for r in load_index(root))
-        if root.is_dir():
-            targets.extend(
-                sorted(p.name for p in root.iterdir() if p.is_dir() and p.name.startswith('session-'))
-            )
-        print('No filters given: selecting ALL session history.', file=sys.stderr)
+        # No ids and no filters: default to ALL sessions of the selected agent.
+        targets.extend(be.all_ids())
+        print(f'No filters given: selecting ALL {be.name} session history.', file=sys.stderr)
 
     seen: set[str] = set()
     uniq: list[str] = []
@@ -676,7 +955,7 @@ def cmd_delete(args: argparse.Namespace) -> int:
             seen.add(t)
             uniq.append(t)
 
-    protected = current_session_ids()
+    protected = be.current_ids()
     blocked = [s for s in uniq if s in protected]
     if blocked and not args.force_current:
         print(
@@ -690,10 +969,12 @@ def cmd_delete(args: argparse.Namespace) -> int:
         print('No sessions selected for delete.', file=sys.stderr)
         return 1
 
-    print(f'Will delete {len(uniq)} session(s) under {root}:')
+    print(f'Will delete {len(uniq)} {be.name} session(s) under {root}:')
     for sid in uniq:
-        p = _safe_session_dir(root, sid)
-        print(f'  {sid}  exists_dir={bool(p and p.is_dir())}')
+        paths = be.paths_for(sid)
+        print(f'  {sid}  exists={bool(paths)}')
+        for path in paths:
+            print(f'      {path}')
 
     if args.dry_run:
         print('Dry-run only; nothing deleted.')
@@ -713,29 +994,34 @@ def cmd_delete(args: argparse.Namespace) -> int:
 
     errors = 0
     for sid in uniq:
-        p = _safe_session_dir(root, sid)
-        if p is None:
+        if not _SESSION_ID_RE.match(sid):
             print(f'refusing unsafe id: {sid!r}', file=sys.stderr)
             errors += 1
             continue
-        try:
-            if p.is_dir():
-                shutil.rmtree(p)
-                print(f'removed dir {p}')
-            else:
-                print(f'no dir for {sid}')
-        except OSError as e:
-            print(f'error removing {p}: {e}', file=sys.stderr)
-            errors += 1
-    remove_from_index(root, set(uniq))
-    print('index.jsonl updated')
+        paths = be.paths_for(sid)
+        if not paths:
+            print(f'nothing on disk for {sid}')
+            continue
+        for p in paths:
+            try:
+                if p.is_dir() and not p.is_symlink():
+                    shutil.rmtree(p)
+                    print(f'removed dir {p}')
+                else:
+                    p.unlink()
+                    print(f'removed file {p}')
+            except OSError as e:
+                print(f'error removing {p}: {e}', file=sys.stderr)
+                errors += 1
+    be.finish_delete(set(uniq))
     return 1 if errors else 0
 
 
 def cmd_stats(args: argparse.Namespace) -> int:
-    root = sessions_root()
+    be = _backend(args)
+    root = be.root
     rows = apply_filters(
-        load_index(root),
+        be.load_rows(),
         project=args.project,
         query=args.query,
         since=args.since,
@@ -747,7 +1033,7 @@ def cmd_stats(args: argparse.Namespace) -> int:
     )
     by_proj = Counter((r.project_dir or '(none)') for r in rows)
     with_t = sum(1 for r in rows if r.transcript_size > 0)
-    print(f'total={len(rows)} with_transcript={with_t} root={root}')
+    print(f'agent={be.name} total={len(rows)} with_transcript={with_t} root={root}')
     print('top projects:')
     for p, n in by_proj.most_common(args.limit or 15):
         print(f'  {n:4d}  {p}')
@@ -761,6 +1047,7 @@ def cmd_stats(args: argparse.Namespace) -> int:
     if args.json:
         json.dump(
             {
+                'agent': be.name,
                 'total': len(rows),
                 'with_transcript': with_t,
                 'projects': by_proj.most_common(),
@@ -783,9 +1070,15 @@ def cmd_patterns(_args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog='histmgr',
-        description='Junie session history manager and reusable-workflow miner',
+        description='Coding-agent session history manager and reusable-workflow miner (Junie CLI, Claude Code)',
+        epilog=(
+            'Target agent: --agent, else AGENT_TARGET, else the calling agent, else the only installed one, '
+            'else an interactive prompt (terminal) — non-interactive runs without a resolvable agent exit 2.'
+        ),
     )
-    p.add_argument('--junie-home', help='Override JUNIE_HOME')
+    p.add_argument('--agent', choices=AGENT_NAMES, help='Agent whose history to use (default: auto, see below)')
+    p.add_argument('--home', help="Override the selected agent's home (default: JUNIE_HOME/CLAUDE_HOME or ~/.junie, ~/.claude)")
+    p.add_argument('--junie-home', help='Override JUNIE_HOME (implies --agent junie)')
     p.add_argument(
         '--check-args',
         action='store_true',
@@ -862,7 +1155,7 @@ def _normalize_argv(argv: list[str] | None) -> list[str]:
         argv_list = list(sys.argv[1:])
     else:
         argv_list = list(argv)
-    globals_with_val = {'--junie-home'}
+    globals_with_val = {'--junie-home', '--agent', '--home'}
     globals_bool = {'-h', '--help'}
     i = 0
     saw_cmd = False
@@ -876,7 +1169,7 @@ def _normalize_argv(argv: list[str] | None) -> list[str]:
         if tok in globals_with_val:
             i += 2
             continue
-        if tok.startswith('--junie-home='):
+        if any(tok.startswith(f'{g}=') for g in globals_with_val):
             i += 1
             continue
         saw_cmd = True
@@ -894,6 +1187,16 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.junie_home:
         os.environ['JUNIE_HOME'] = args.junie_home
+        if not args.agent:
+            args.agent = 'junie'
+    try:
+        agent = resolve_agent(args.agent, purpose=f'histmgr {args.cmd}')
+    except AgentSelectionError as exc:
+        print(f'histmgr: {exc}', file=sys.stderr)
+        return 2
+    if agent == 'junie' and args.home:
+        os.environ['JUNIE_HOME'] = args.home
+    args.backend = make_backend(agent, args.home)
     return int(args.func(args) or 0)
 
 
