@@ -1,0 +1,239 @@
+{
+  "cleanupPeriodDays": 14,
+  "desktopSessionCleanupPeriodDays": 14,
+  "permissions": {
+    "allow": [
+      "Bash(make *)",
+      "Bash(make)",
+      "Bash(just *)",
+      "Bash(just)",
+      "Bash(mise run *)",
+      "Bash(mise run)",
+      "Bash(mise tasks *)",
+      "Bash(mise tasks)",
+      "Bash(mise exec *)",
+      "Bash(mise *)",
+      "Bash(npm test *)",
+      "Bash(npm test)",
+      "Bash(npm t *)",
+      "Bash(npm t)",
+      "Bash(npm start *)",
+      "Bash(npm start)",
+      "Bash(pnpm test *)",
+      "Bash(pnpm test)",
+      "Bash(pnpm *)",
+      "Bash(yarn test *)",
+      "Bash(yarn test)",
+      "Bash(yarn *)",
+      "Bash(bun test *)",
+      "Bash(bun test)",
+      "Bash(bun *)",
+      "Bash(cargo build *)",
+      "Bash(cargo build)",
+      "Bash(cargo test *)",
+      "Bash(cargo test)",
+      "Bash(cargo check *)",
+      "Bash(cargo check)",
+      "Bash(cargo clippy *)",
+      "Bash(cargo clippy)",
+      "Bash(cargo run *)",
+      "Bash(cargo run)",
+      "Bash(cargo *)",
+      "Bash(gradle *)",
+      "Bash(gradle)",
+      "Bash(./gradlew *)",
+      "Bash(./gradlew)",
+      "Bash(mvn *)",
+      "Bash(mvn)",
+      "Bash(./mvnw *)",
+      "Bash(./mvnw)",
+      "Bash(pytest *)",
+      "Bash(pytest)",
+      "Bash(go test *)",
+      "Bash(go test)",
+      "Bash(go build *)",
+      "Bash(go build)",
+      "Bash(go vet *)",
+      "Bash(go vet)",
+      "Bash(go generate *)",
+      "Bash(go generate)",
+      "Bash(tox *)",
+      "Bash(tox)",
+      "Bash(nox *)",
+      "Bash(nox)",
+      "Bash(rake *)",
+      "Bash(rake)",
+      "Bash(bats *)",
+      "Bash(bats)",
+      "Bash(ctest *)",
+      "Bash(ctest)",
+      "Bash(ninja *)",
+      "Bash(ninja)",
+      "Bash(composer run-script *)",
+      "Bash(composer test *)",
+      "Bash(composer test)",
+      "Edit(~/.claude/plans/**)"
+    ],
+    "deny": [
+      "Bash(sudo )",
+      "Bash(su )",
+      "Bash(chmod 777 )",
+      "Bash(chmod -R 777 )",
+      "Bash(chown )",
+      "Bash(mkfs )",
+      "Bash(dd )",
+      "Bash(rm -rf /)",
+      "Bash(rm -rf /*)",
+      "Bash(shutdown )",
+      "Bash(reboot )",
+      "Bash(poweroff )",
+      "Bash(init )",
+      "Read(./.env)",
+      "Read(./.env.local)",
+      "Read(./.env.development)",
+      "Read(./.env.production)",
+      "Read(./.env.test)",
+      "Read(./.env.staging)",
+      "Read(//etc/shadow)",
+      "Read(//etc/sudoers)",
+      "Read(~/.ssh)",
+      "Read(~/.aws)",
+      "Read(~/.config/gcloud)",
+      "Read(~/.kube)",
+      "Read(~/.docker)",
+      "Read(~/.gnupg)",
+      "Read(~/.netrc)",
+      "Read(~/.bash_history)",
+      "Read(~/.zsh_history)",
+      "Edit(//etc)",
+      "Edit(//usr)",
+      "Edit(//bin)",
+      "Edit(//sbin)",
+      "Edit(//boot)",
+      "Edit(//root)",
+      "Edit(~/.ssh)",
+      "Edit(~/.aws)",
+      "Edit(~/.kube)",
+      "Edit(~/.gnupg)",
+      "Edit(~/.bashrc)",
+      "Edit(~/.bash_profile)",
+      "Edit(~/.zshrc)",
+      "Edit(~/.profile)",
+      "Read(~/.claude/.credentials.json)",
+      "Edit(~/.claude/*)"
+    ],
+    "defaultMode": "default",
+    "disableBypassPermissionsMode": "disable"
+  },
+  "model": "opus",
+  "enableAllProjectMcpServers": false,
+  "sandbox": {
+    "enabled": true,
+    "failIfUnavailable": true,
+    "autoAllowBashIfSandboxed": false,
+    "allowUnsandboxedCommands": false,
+    "network": {
+      "allowAllUnixSockets": true
+    },
+    "filesystem": {
+      "allowWrite": [
+        "~/.cache",
+        "~/.local/share/golang",
+        "~/.local/share/mise/installs/go/pkg",
+        "~/.config/go",
+        "~/.local/state/mise"
+      ],
+      "denyWrite": [
+        "/etc",
+        "/usr",
+        "/bin",
+        "/sbin",
+        "/boot",
+        "/lib",
+        "/lib64",
+        "/opt",
+        "/var",
+        "/root",
+        "~/.ssh",
+        "~/.aws",
+        "~/.kube",
+        "~/.gnupg",
+        "~/.claude",
+        "~/.bashrc",
+        "~/.bash_profile",
+        "~/.zshrc",
+        "~/.profile"
+      ],
+      "denyRead": [
+        "~/.ssh",
+        "~/.aws",
+        "~/.config/gcloud",
+        "~/.kube",
+        "~/.docker",
+        "~/.gnupg",
+        "~/.netrc",
+        "~/.claude/.credentials.json",
+        "~/.bash_history",
+        "~/.zsh_history",
+        "/etc/shadow",
+        "/etc/sudoers",
+        "**/.env",
+        "**/.env.*",
+        "**/*.pem",
+        "**/*.key",
+        "**/*id_rsa*",
+        "**/*id_ed25519*"
+      ]
+    },
+    "credentials": {
+      "files": [
+        {
+          "path": "~/.ssh",
+          "mode": "deny"
+        },
+        {
+          "path": "~/.aws",
+          "mode": "deny"
+        },
+        {
+          "path": "~/.config/gcloud",
+          "mode": "deny"
+        },
+        {
+          "path": "~/.kube",
+          "mode": "deny"
+        },
+        {
+          "path": "~/.docker",
+          "mode": "deny"
+        },
+        {
+          "path": "~/.gnupg",
+          "mode": "deny"
+        },
+        {
+          "path": "~/.claude/.credentials.json",
+          "mode": "deny"
+        }
+      ]
+    },
+    "enableWeakerNestedSandbox": true,
+    "allowNestedUserNamespaces": true
+  },
+  "modelSettings": {
+    "claude-sonnet-5-5": {
+      "effortLevel": "medium"
+    },
+    "claude-fable-5-1": {
+      "effortLevel": "high"
+    },
+    "claude-opus-5-5": {
+      "effortLevel": "high"
+    }
+  },
+  "autoUpdatesChannel": "stable",
+  "minimumVersion": "2.1.310",
+  "theme": "custom:not-terrible",
+  "preferredNotifChannel": "auto",
+  "autoCompactEnabled": true
+}

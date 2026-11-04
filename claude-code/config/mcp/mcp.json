@@ -1,0 +1,26 @@
+{
+  "mcpServers": {
+    "pycharm": {
+      "type": "stdio",
+      "command": "/home/anon/.local/share/JetBrains/Toolbox/apps/pycharm/bin/pycharm",
+      "args": [
+        "stdioMcpServer"
+      ],
+      "env": {
+        "IJ_MCP_SERVER_PORT": "64343"
+      }
+    },
+    "mise": {
+      "type": "stdio",
+      "command": "/usr/bin/mise",
+      "args": [
+        "--cd",
+        "/home/anon",
+        "mcp"
+      ],
+      "env": {
+        "MISE_CONFIG_FILE": "/home/anon/.config/mise/config.toml"
+      }
+    }
+  }
+}

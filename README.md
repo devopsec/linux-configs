@@ -4,12 +4,15 @@ Personal Linux configuration files and tooling.
 
 ## Contents
 
-| Directory                            | Description                                                                   |
-|--------------------------------------|-------------------------------------------------------------------------------|
-| [`fonts/`](fonts/)                   | Downloaded/distro fonts, fontconfig rules, installer and tests                |
-| [`neovim/`](neovim/)                 | Neovim configs (`nvim`, `nvimgit`, `nvimpager`) and their installer and tests |
-| [`vim/`](vim/)                       | Vim configs (`vim`, `vimpager`) and their installer and tests                 |
-| [`installer-libs/`](installer-libs/) | Shared installer library used by all families                                 |
+| Directory                            | Description                                                                         |
+|--------------------------------------|-------------------------------------------------------------------------------------|
+| [`fonts/`](fonts/)                   | Downloaded/distro fonts, fontconfig rules, installer and tests                      |
+| [`neovim/`](neovim/)                 | Neovim configs (`nvim`, `nvimgit`, `nvimpager`) and their installer and tests       |
+| [`vim/`](vim/)                       | Vim configs (`vim`, `vimpager`) and their installer and tests                       |
+| [`installer-libs/`](installer-libs/) | Shared installer library used by all families                                       |
+| [`junie-cli/`](junie-cli/)           | Junie CLI home (`~/.junie`): agent guidelines, skills, commands, tooling            |
+| [`claude-code/`](claude-code/)       | Claude Code home (`~/.claude`): non-sensitive settings, theme, MCP servers          |
+| [`resources/`](resources/)           | Bundled packages (`flatpaks/`, `debs/`) and shared agent configs (`agent-configs/`) |
 
 ## Installation
 
@@ -115,6 +118,38 @@ installer-libs/tests/run.sh
 neovim/tests/startup.sh # nvim, nvimgit, nvimpager and the nvimpager runtime-load case
 vim/tests/startup.sh # vim
 ```
+
+## Agent Configs
+
+| Directory                  | Synced to                  | Contents                                                                                                                                      |
+|----------------------------|----------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------|
+| `resources/agent-configs/` | `~/.junie` and `~/.claude` | `skills/`, `commands/` (agent-agnostic templates) and `custom/` (docs, scripts, shims) used by both agents                                    |
+| `junie-cli/config/`        | `~/.junie`                 | `AGENTS.md`, `config.json`, `extensions/`, `mcp/`, `models/`, `sandbox.json`; `skills`/`commands`/`custom` link to `resources/agent-configs/` |
+| `claude-code/config/`      | `~/.claude`                | `settings.json`, `themes/`, `mcp/mcp.json`, `CLAUDE.{security,workdir}.md`; `skills`/`commands`/`custom` link to `resources/agent-configs/`   |
+
+Each agent dir has a `sync.sh` that installs **fresh copies** into the agent's home: top-level files are overwritten and each managed directory is
+mirrored, so files removed from the repo are deleted there too. Symlinks into `resources/agent-configs/` are resolved, `__pycache__/` is ignored, and runtime state
+outside the managed entries (sessions, logs, caches, credentials, history) is never touched. `-n` prints what would change or be deleted without
+writing anything.
+
+- `junie-cli/sync.sh` mirrors every entry of `junie-cli/config/` into `~/.junie` (`JUNIE_HOME` overrides). Local-only paths inside managed
+  directories are kept: `extensions/marketplaces/` (installed by Junie) and `models/inactive/` (model configs holding API keys); extend the `KEEP`
+  list in the script for more.
+- `claude-code/sync.sh` mirrors `skills/`, `commands/`, `custom/` and `themes/` into `~/.claude` (`CLAUDE_HOME` overrides). `settings.json` becomes
+  the repo version plus only the local keys listed in `PRESERVE_SETTINGS` (`autoMode`, which names work repositories), so keys removed from the
+  repo disappear locally. Each MCP server in `mcp/mcp.json` is added to `~/.claude.json` with `claude mcp add-json`, or replaced when it differs;
+  servers that are not in the repo are left alone and listed (only for the real `~/.claude`). `~/.claude/CLAUDE.md` is generated from
+  `junie-cli/config/AGENTS.md` sections 0-5 (pointing at `~/.claude/custom/`) plus `CLAUDE.security.md` and `CLAUDE.workdir.md`.
+
+Slash commands in `resources/agent-configs/commands/` are templates: each sync renders `{{agent_home}}`, `{{agent}}` and `{{args}}` to
+`~/.junie`/`junie`/`$prompt` or `~/.claude`/`claude`/`$ARGUMENTS`. `histmgr` (session history) and `agentmgr` (agent config) work on either agent:
+`--agent junie|claude`, else `AGENT_TARGET`, else the calling agent, else the only installed agent, else an interactive prompt when the shims in
+`~/.<agent>/custom/bin/` are run from a terminal. See `resources/agent-configs/custom/docs/commands-catalog.md`.
+
+Only non-sensitive files are tracked. Left out on purpose: `~/.claude/.credentials.json`, `~/.claude.json` (account and project state; its MCP
+servers are mirrored in `claude-code/config/mcp/mcp.json`), session data (`projects/`, `history.jsonl`, `file-history/`, `sessions/`, caches,
+`plans/`), server-managed `policy-limits*`/`remote-settings*` files, plugin caches, Junie's `models/inactive/`, and the `autoMode` block of
+`settings.json`, which describes work repositories.
 
 ## License
 

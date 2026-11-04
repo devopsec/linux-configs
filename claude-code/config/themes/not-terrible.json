@@ -1,0 +1,8 @@
+{
+  "name": "not-terrible",
+  "base": "dark",
+  "overrides": {
+    "background": "#616161",
+    "clawd_background": "#616161"
+  }
+}
