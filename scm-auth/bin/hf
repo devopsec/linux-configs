@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+#
+# scm-auth shim
+#
+# hf: runs the real Hugging Face CLI with HF_TOKEN taken from the login keyring (the git
+# credential for https://huggingface.co, user 'hf', stored by 'scm-auth-login hf'), so no
+# plaintext token file is needed. HF_TOKEN is only set for the child process, never when it is
+# already set, and the real hf runs without it when the keyring holds no token (so 'hf auth
+# login', '--help', ... keep working). The second line marks this file as the scm-auth shim.
+#
+# Secret-handling script: it never traces. DEBUG is ignored on purpose and xtrace inherited
+# through SHELLOPTS (or 'bash -x') is switched off first.
+#
+
+set +x
+unset BASH_XTRACEFD GIT_TRACE GIT_TRACE2 GIT_TRACE2_EVENT GIT_TRACE2_PERF GIT_TRACE_CURL GIT_CURL_VERBOSE
+
+set -Eeuo pipefail
+shopt -s inherit_errexit nullglob
+
+SHIM_MARKER='# scm-auth shim'
+HF_HOST=huggingface.co
+HF_USER=hf
+
+function log() { printf '%s hf (scm-auth shim): %s\n' "$(date -Iseconds)" "$*" >&2; }
+
+# true when <file> is a copy of this shim (marker within its first lines)
+function is_shim() {
+    head -n 5 -- "$1" 2>/dev/null | grep -qxF -- "$SHIM_MARKER"
+}
+
+# the first hf on PATH that is neither this file nor another copy of the shim
+function real_hf() {
+    local self candidate
+    self="$(readlink -f "${BASH_SOURCE[0]}")"
+    while IFS= read -r candidate; do
+        [[ "$(readlink -f "$candidate")" != "$self" ]] || continue
+        ! is_shim "$candidate" || continue
+        printf '%s\n' "$candidate"
+        return 0
+    done < <(type -aP hf || true)
+    return 1
+}
+
+function token_helper() {
+    local candidate
+    candidate="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/git-credential-token"
+    [[ -x "$candidate" ]] || candidate="$(command -v git-credential-token || true)"
+    [[ -n "$candidate" ]] && printf '%s\n' "$candidate"
+}
+
+function main() {
+    local real helper token=""
+    real="$(real_hf)" || { log 'the real hf CLI was not found on PATH (install huggingface_hub, e.g. via mise/pipx)'; return 127; }
+    if [[ -z "${HF_TOKEN:-}" ]]; then
+        helper="$(token_helper || true)"
+        if [[ -n "$helper" ]]; then
+            # SCM_AUTH_TOOL attributes the keyring lookup to hf (only for the helper, not the CLI)
+            token="$(SCM_AUTH_TOOL=hf "$helper" "$HF_HOST" "$HF_USER" 2>/dev/null)" || token=""
+        fi
+        if [[ -n "$token" ]]; then
+            export HF_TOKEN="$token"
+        fi
+        token=""
+    fi
+    exec "$real" "$@"
+}
+
+main "$@"

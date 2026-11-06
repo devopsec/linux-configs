@@ -1,0 +1,232 @@
+#!/usr/bin/env bash
+#
+# scm-auth-login: points an SCM client at the HTTPS token git keeps in the login keyring, so the
+# git-credential-scm entry is the only persistent copy.
+#   <forge-domain>  forge stores 'token-cmd = SCM_AUTH_TOOL=forge git-credential-token <domain>'
+#                   instead of a token; any plaintext 'token =' left in that domain's forge
+#                   config section is removed
+#   hf              the Hugging Face token is read from stdin/tty and stored for
+#                   https://huggingface.co (user 'hf'); the plaintext hf 'token' file is deleted
+#
+# Secret-handling script: it never traces. DEBUG is ignored on purpose and xtrace inherited
+# through SHELLOPTS (or 'bash -x') is switched off first; tokens are read from stdin only and
+# only ever passed to git through stdin (never argv, stderr or logs).
+#
+
+set +x
+unset BASH_XTRACEFD GIT_TRACE GIT_TRACE2 GIT_TRACE2_EVENT GIT_TRACE2_PERF GIT_TRACE_CURL GIT_CURL_VERBOSE
+
+function usage() {
+    cat <<'EOF'
+Usage: scm-auth-login [--user NAME] [--store-token] <forge-domain>
+       scm-auth-login [--user NAME] hf
+
+<forge-domain>  e.g. github.com, gitlab.com, codeberg.org: requires a git HTTPS token for the
+                domain in the keyring (or --store-token), then runs
+                'forge auth login --domain <domain>
+                 --token-cmd "SCM_AUTH_TOOL=forge git-credential-token <domain>"'
+                and strips any plaintext 'token =' from that domain's forge config section
+                (a redacted backup 'config.bak.<timestamp>' is kept)
+hf              read a Hugging Face token from stdin (silent prompt on a tty), store it via
+                'git credential approve' (helper 'scm --tool=hf') for https://huggingface.co
+                (user 'hf') and delete the plaintext hf 'token' file (stored_tokens is only
+                reported: it may hold other named accounts)
+
+  --user NAME    username of the keyring entry (default: oauth2 for forges, hf for hf)
+  --store-token  forge only: read a token from stdin and store it in the keyring first
+  -h, --help     show this help
+
+Environment:
+  SCM_AUTH_CREDENTIAL_HELPER  helper to write to instead of 'scm --tool=<forge|hf>' (tests only)
+EOF
+}
+
+set -Eeuo pipefail
+shopt -s inherit_errexit nullglob
+
+SELF_DIR="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+HF_HOST=huggingface.co
+
+function log() { printf '%s scm-auth-login: %s\n' "$(date -Iseconds)" "$*" >&2; }
+
+# the git-credential-token installed next to this script, else the one on PATH
+function token_helper() {
+    local candidate="$SELF_DIR/git-credential-token"
+    [[ -x "$candidate" ]] || candidate="$(command -v git-credential-token || true)"
+    [[ -n "$candidate" ]] || { log 'git-credential-token not found (run ./install.sh scm-auth)'; return 1; }
+    printf '%s\n' "$candidate"
+}
+
+# git helper string for git-credential-scm attributed to <tool>: the absolute path of the copy
+# installed next to this script (or on PATH) when it is shell-safe, else the bare 'scm' name
+function scm_helper() {
+    local tool="$1" candidate="$SELF_DIR/git-credential-scm"
+    [[ -x "$candidate" ]] || candidate="$(command -v git-credential-scm || true)"
+    if [[ "$candidate" =~ ^/[A-Za-z0-9._/+-]+$ && -x "$candidate" ]]; then
+        printf '%s --tool=%s\n' "$candidate" "$tool"
+    else
+        printf 'scm --tool=%s\n' "$tool"
+    fi
+}
+
+# reads one token line into the variable named $1: silent prompt on a tty, else plain stdin
+function read_token() {
+    local -n token_ref="$1"
+    local prompt="$2" line=""
+    if [[ -t 0 ]]; then
+        printf '%s' "$prompt" >&2
+        IFS= read -rs line || true
+        printf '\n' >&2
+    else
+        IFS= read -r line || true
+    fi
+    line="${line%$'\r'}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    [[ -n "$line" ]] || { log 'no token given'; return 1; }
+    # keeps the credential protocol free of injected lines/keys
+    [[ "$line" =~ ^[A-Za-z0-9._~+/=-]+$ ]] || { log 'token contains unexpected characters; refusing'; return 1; }
+    # shellcheck disable=SC2034 # nameref: assigns the caller's variable
+    token_ref="$line"
+}
+
+# stores the token (only via stdin) for https://<host> as <user> in the keyring, tagged tool=<tool>
+function store_token() {
+    local host="$1" user="$2" token="$3" tool="$4" helper
+    helper="${SCM_AUTH_CREDENTIAL_HELPER:-$(scm_helper "$tool")}"
+    command -v git &>/dev/null || { log 'missing dependency: git'; return 1; }
+    printf 'protocol=https\nhost=%s\nusername=%s\npassword=%s\n\n' "$host" "$user" "$token" \
+        | GIT_TERMINAL_PROMPT=0 git -c credential.helper= -c "credential.helper=$helper" credential approve
+    log "stored the token for https://$host (user '$user') in the git credential store ($helper)"
+}
+
+# true when git-credential-token finds a token for <host> [user]; the value goes to /dev/null
+function token_present() {
+    local helper bytes
+    helper="$(token_helper)" || return 1
+    bytes="$("$helper" "$@" 2>/dev/null | wc -c)" || bytes=0
+    (( bytes > 0 ))
+}
+
+function forge_config_path() {
+    printf '%s/forge/config\n' "${XDG_CONFIG_HOME:-$HOME/.config}"
+}
+
+# removes 'token =' lines of the [<domain>] section from the forge config, preserving the rest
+# and the file mode; the backup it keeps has every token value redacted. The new content goes to
+# a temp file next to the config (same mode) that is renamed over it, so an interrupted run never
+# leaves a truncated config
+function forge_strip_plaintext() (
+    local domain="$1" config tmp="" backup
+    config="$(forge_config_path)"
+    [[ -f "$config" ]] || return 0
+    umask 077
+    tmp="$(mktemp "$config.tmp.XXXXXX")"
+    # the path is expanded on purpose: the trap must still know it after the function's locals are gone
+    # shellcheck disable=SC2064
+    trap "rm -f -- $(printf '%q' "$tmp")" EXIT
+    awk -v domain="$domain" '
+        { line = $0; sub(/^[ \t]+/, "", line); sub(/[ \t\r]+$/, "", line) }
+        line ~ /^\[.*\]$/ { section = substr(line, 2, length(line) - 2) }
+        section == domain && line ~ /^token[ \t]*=/ { next }
+        { print }
+    ' "$config" > "$tmp"
+    if cmp -s -- "$config" "$tmp"; then
+        log "no plaintext token for $domain in '$config'"
+        return 0
+    fi
+    backup="$config.bak.$(date +%Y%m%d%H%M%S)"
+    awk '{ if (match($0, /^[ \t]*token[ \t]*=/)) print substr($0, 1, RLENGTH) " <redacted>"; else print }' \
+        "$config" > "$backup"
+    chmod 0600 "$backup"
+    chmod --reference="$config" -- "$tmp"
+    mv -f -- "$tmp" "$config"
+    log "removed the plaintext token for $domain from '$config' (redacted backup: '$backup')"
+)
+
+function login_forge() {
+    local domain="$1" user="$2" store="$3" token="" helper token_cmd
+    helper="$(token_helper)"
+    if (( store == 1 )); then
+        read_token token "Token for https://$domain (input hidden): "
+        store_token "$domain" "${user:-oauth2}" "$token" forge
+        token=""
+    fi
+    if ! token_present "$domain" ${user:+"$user"}; then
+        log "no git HTTPS token for $domain in the keyring. Store one first, e.g.:"
+        log "  git ls-remote https://$domain/<owner>/<private-repo>   (git-credential-oauth browser flow; github/gitlab/codeberg/gitea)"
+        log "  scm-auth-login --store-token $domain                  (paste a personal access token)"
+        return 1
+    fi
+    if ! command -v forge &>/dev/null; then
+        log "forge not installed; skipping 'forge auth login' for $domain (the keyring token is in place)"
+        return 0
+    fi
+    # forge runs token-cmd through 'sh -c' with its own PATH, so use the absolute helper path;
+    # SCM_AUTH_TOOL attributes the keyring lookups to forge
+    token_cmd="SCM_AUTH_TOOL=forge '${helper//\'/\'\\\'\'}' $domain${user:+ $user}"
+    forge auth login --domain "$domain" --token-cmd "$token_cmd" </dev/null
+    forge_strip_plaintext "$domain"
+}
+
+function login_hf() {
+    local user="${1:-hf}" token="" hf_home token_file stored_file
+    hf_home="${HF_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/huggingface}"
+    token_file="${HF_TOKEN_PATH:-$hf_home/token}"
+    stored_file="$hf_home/stored_tokens"
+    read_token token "Hugging Face token (input hidden): "
+    store_token "$HF_HOST" "$user" "$token" hf
+    token=""
+    token_present "$HF_HOST" "$user" || { log "the token could not be read back for $HF_HOST"; return 1; }
+    if [[ -e "$token_file" ]]; then
+        rm -f -- "$token_file"
+        log "deleted plaintext hf token file '$token_file' (the hf shim exports HF_TOKEN from the keyring)"
+    fi
+    if [[ -e "$stored_file" ]]; then
+        log "review '$stored_file' and delete it by hand: it may hold other named hf accounts that are not in the keyring"
+    fi
+    [[ -z "${HF_TOKEN:-}" ]] || log 'HF_TOKEN is set in this environment and overrides the keyring token; unset it'
+    return 0
+}
+
+function main() {
+    local user="" target="" store=0
+    while (( $# > 0 )); do
+        case "$1" in
+        --user)
+            (( $# > 1 )) || { log '--user needs a value'; return 2; }
+            user="$2"
+            shift
+            ;;
+        --store-token) store=1 ;;
+        -h | --help)
+            usage
+            return 0
+            ;;
+        -*)
+            log "unknown option: $1"
+            usage >&2
+            return 2
+            ;;
+        *)
+            [[ -z "$target" ]] || { log "unexpected argument: $1"; return 2; }
+            target="$1"
+            ;;
+        esac
+        shift
+    done
+    [[ -n "$target" ]] || { usage >&2; return 2; }
+    [[ -z "$user" || "$user" =~ ^[A-Za-z0-9._@+-]+$ ]] || { log 'invalid username'; return 2; }
+    : "${HOME:?HOME is not set}"
+    case "$target" in
+    hf | "$HF_HOST")
+        login_hf "$user"
+        ;;
+    *)
+        [[ "$target" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] || { log "invalid forge domain: '$target'"; return 2; }
+        login_forge "$target" "$user" "$store"
+        ;;
+    esac
+}
+
+main "$@"

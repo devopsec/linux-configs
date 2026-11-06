@@ -1,0 +1,379 @@
+#!/usr/bin/env bash
+#
+# scm-auth-migrate: one-time retirement of the multi-agent SSH setup so that $SSH_AUTH_SOCK
+# (gcr-ssh-agent, unlocked by pam_gnome_keyring) is the only agent ssh uses.
+#   - ~/.ssh/config: comments out every IdentityAgent pin and every IdentityFile for which
+#     neither the file nor its .pub exists, unless its Host/Match block has no other key
+#     material (then the line is kept and a warning names the key to export; a missing '-sk'
+#     stub next to its plain sibling line is still commented out); timestamped
+#     0600 backup first, diff printed; a lone .pub is kept because IdentitiesOnly uses it
+#     to select the matching agent key
+#   - systemd --user: enables gcr-ssh-agent.socket, disables the plain ssh-agent and the
+#     ssh-add-gitlab workaround, deletes the workaround unit; masks ssh-agent.socket when a
+#     vendor/global symlink keeps it enabled after the user-level disable
+#   - removes ~/.local/bin/ssh-askpass-keyring
+#   - login keyring: clears the 'SSH gitlab_ed25519' item (secret-tool) and runs
+#     'git-credential-scm retag', which tags every org.git.Password item application=scm-auth
+#     plus tool=<git|forge|hf>, relabels it 'scm-auth: <url>' and collapses duplicates to the
+#     newest; secret values are never read into the script or printed
+# Default is a dry run (retag previews); nothing changes without --apply. Re-running after
+# --apply is a no-op.
+#
+
+function usage() {
+    cat <<'EOF'
+Usage: scm-auth-migrate [--dry-run | --apply] [--no-systemd] [--no-keyring]
+
+Retire IdentityAgent pins, the plain ssh-agent, the ssh-add-gitlab workaround and stale
+keyring items so gcr-ssh-agent ($SSH_AUTH_SOCK) is the only SSH agent.
+
+  --dry-run     show the ~/.ssh/config diff and planned actions, change nothing (default)
+  --apply       perform the migration (backs up ~/.ssh/config first)
+  --no-systemd  skip all 'systemctl --user' actions and the workaround unit file
+  --no-keyring  skip all keyring actions ('secret-tool' and 'git-credential-scm retag')
+  -h, --help    show this help
+
+Environment:
+  SCM_AUTH_HELPER  git-credential-scm binary to run (default: next to this script, then PATH)
+EOF
+}
+
+set -Eeuo pipefail
+shopt -s inherit_errexit nullglob
+[[ "${DEBUG:-0}" == 1 ]] && set -x
+
+COMMENT_PREFIX='# scm-auth-migrate: '
+LEGACY_UNIT='ssh-add-gitlab.service'
+LEGACY_SSH_KEY_ITEM='gitlab_ed25519'
+
+declare -i APPLY=0 DO_SYSTEMD=1 DO_KEYRING=1 CHANGES=0 SYSTEMD_RUNS=0 PROBLEMS=0
+WORK_DIR=""
+
+function log() { printf '%s scm-auth-migrate: %s\n' "$(date -Iseconds)" "$*" >&2; }
+
+# prints a planned action in dry-run mode, runs it otherwise; failures are reported, not fatal
+function act() {
+    if (( APPLY == 0 )); then
+        printf 'would run: %s\n' "$*"
+        return 0
+    fi
+    "$@" || log "warning: '$*' failed (exit $?); continuing"
+}
+
+# expands '~', '%d' and ${HOME}/$HOME in an IdentityFile value; fails when other tokens remain
+# (%h, %r, other env vars) or the path is relative, i.e. existence cannot be decided here
+function expand_identity_path() {
+    local value="$1"
+    # shellcheck disable=SC2088 # matching a literal '~' written in ssh_config
+    case "$value" in
+    '~/'*) value="$HOME/${value#'~/'}" ;;
+    '%d/'*) value="$HOME/${value#'%d/'}" ;;
+    esac
+    value="${value//'${HOME}'/$HOME}"
+    value="${value//'$HOME'/$HOME}"
+    [[ "$value" == /* && "$value" != *'%'* && "$value" != *'$'* ]] || return 1
+    printf '%s\n' "$value"
+}
+
+# writes the migrated form of ssh config <src> to <dst>. Pass 1 groups the lines into Host/Match
+# blocks (top-level lines form their own block) and counts the IdentityFile lines that still carry
+# key material. Pass 2 comments out a missing IdentityFile (neither the file nor its .pub exists)
+# when its block keeps other key material, or when it is a '-sk' stub whose plain sibling line is
+# in the same block; otherwise the line stays and a warning names the key to export
+function migrate_ssh_config() {
+    local src="$1" dst="$2" line value path name target hint_key b
+    local -a lines=() block_of=() missing_path=() block_keys=() block_header=()
+    local -A hinted=() block_paths=()
+    local -i i block=0
+    local agent_re='^[[:space:]]*identityagent([[:space:]]*=|[[:space:]]+)'
+    local file_re='^[[:space:]]*identityfile([[:space:]]*=[[:space:]]*|[[:space:]]+)(.*)$'
+    local block_re='^[[:space:]]*(host|match)([[:space:]=]|$)'
+    mapfile -t lines <"$src"
+    block_header[0]='(top level)'
+    shopt -s nocasematch
+    for i in "${!lines[@]}"; do
+        line="${lines[i]}"
+        if [[ "$line" =~ $block_re ]]; then
+            block+=1
+            block_header[block]="${line#"${line%%[![:space:]]*}"}"
+        fi
+        block_of[i]=$block
+        missing_path[i]=""
+        if [[ "$line" =~ $file_re ]]; then
+            value="${BASH_REMATCH[2]%$'\r'}"
+            value="${value%"${value##*[![:space:]]}"}"
+            value="${value#\"}"
+            value="${value%\"}"
+            if [[ "$value" != none ]]; then
+                if path="$(expand_identity_path "$value")"; then
+                    block_paths["$block:$path"]=1
+                    if [[ ! -e "$path" && ! -e "$path.pub" ]]; then
+                        missing_path[i]="$path"
+                    else
+                        (( block_keys[block] += 1 ))
+                    fi
+                else
+                    (( block_keys[block] += 1 ))
+                fi
+            fi
+        fi
+    done
+    : >"$dst"
+    for i in "${!lines[@]}"; do
+        line="${lines[i]}"
+        if [[ "$line" =~ $agent_re ]]; then
+            printf '%s%s\n' "$COMMENT_PREFIX" "$line" >>"$dst"
+            continue
+        fi
+        if [[ -n "${missing_path[i]}" ]]; then
+            b="${block_of[i]}"
+            # a missing FIDO '-sk' stub is redundant next to its plain sibling line in the same
+            # block (existing or not): only the plain path is the export target
+            if (( ${block_keys[b]:-0} > 0 )) \
+                || [[ "${missing_path[i]}" == *-sk && -n "${block_paths["$b:${missing_path[i]%-sk}"]:-}" ]]; then
+                printf '%s%s\n' "$COMMENT_PREFIX" "$line" >>"$dst"
+                continue
+            fi
+            # a FIDO '-sk' stub is covered by the plain key of the same name, so the export target
+            # is always the non-'-sk' path; the hint is printed once per block and target
+            name="${missing_path[i]##*/}"
+            name="${name%-sk}"
+            target="${missing_path[i]%-sk}.pub"
+            hint_key="$b:$target"
+            if [[ -n "${hinted[$hint_key]:-}" ]]; then
+                printf 'warning: no key material for %s (host block: %s); export hint for %s given above\n' \
+                    "${missing_path[i]}" "${block_header[b]}" "$target" >&2
+            else
+                hinted[$hint_key]=1
+                printf 'warning: no key material for %s (host block: %s); export it with: ssh-add -L | grep -F %s > %s\n' \
+                    "${missing_path[i]}" "${block_header[b]}" "$name" "$target" >&2
+            fi
+        fi
+        printf '%s\n' "$line" >>"$dst"
+    done
+    shopt -u nocasematch
+}
+
+function step_ssh_config() {
+    local config="$HOME/.ssh/config" backup=""
+    if [[ ! -f "$config" ]]; then
+        log "'$config' not found; nothing to migrate there"
+        return 0
+    fi
+    migrate_ssh_config "$config" "$WORK_DIR/config"
+    if cmp -s -- "$config" "$WORK_DIR/config"; then
+        log "'$config' has no IdentityAgent pins or missing IdentityFile entries"
+        return 0
+    fi
+    CHANGES+=1
+    if (( APPLY == 0 )); then
+        log "planned changes to '$config':"
+        diff -u --label "$config" --label "$config (migrated)" -- "$config" "$WORK_DIR/config" || true
+        return 0
+    fi
+    backup="$config.bak.$(date +%Y%m%d-%H%M%S)"
+    [[ ! -e "$backup" ]] || backup="$backup.$$"
+    install -m 0600 -- "$config" "$backup"
+    # cp onto the existing file keeps its mode and owner
+    cp -- "$WORK_DIR/config" "$config"
+    log "backed up '$config' to '$backup'; changes:"
+    diff -u -- "$backup" "$config" || true
+}
+
+function step_systemd() {
+    local unit_file="$HOME/.config/systemd/user/$LEGACY_UNIT" unit
+    if (( DO_SYSTEMD == 0 )); then
+        log "skipping systemd --user actions (--no-systemd)"
+        return 0
+    fi
+    if ! command -v systemctl &>/dev/null; then
+        log "systemctl not found; skipping systemd --user actions"
+        return 0
+    fi
+    SYSTEMD_RUNS+=1
+    act systemctl --user enable gcr-ssh-agent.socket
+    # one call per unit so a missing unit does not abort the others
+    for unit in ssh-agent.socket ssh-agent.service "$LEGACY_UNIT"; do
+        act systemctl --user disable --now "$unit"
+    done
+    step_mask_ssh_agent_socket
+    step_restore_auth_sock
+    if [[ -e "$unit_file" ]]; then
+        CHANGES+=1
+        act rm -f -- "$unit_file"
+    fi
+    act systemctl --user daemon-reload
+}
+
+# succeeds when <state> (systemctl is-enabled output) still lets the unit start: anything but
+# disabled, masked or not-found
+function unit_still_enabled() {
+    case "$1" in
+    '' | disabled | masked | masked-runtime | not-found | bad) return 1 ;;
+    *) return 0 ;;
+    esac
+}
+
+# Ubuntu's openssh-client enables ssh-agent.socket for every user through
+# /etc/systemd/user/sockets.target.wants; a user-level disable cannot remove that link, so the
+# socket is masked (a /dev/null link in ~/.config/systemd/user; undo: systemctl --user unmask)
+function step_mask_ssh_agent_socket() {
+    local unit=ssh-agent.socket state
+    state="$(systemctl --user is-enabled "$unit" 2>/dev/null)" || true
+    state="${state%%$'\n'*}"
+    if (( APPLY == 0 )); then
+        if unit_still_enabled "$state"; then
+            printf 'would run (only if %s is still enabled after disable): systemctl --user mask --now %s\n' "$unit" "$unit"
+        fi
+        return 0
+    fi
+    unit_still_enabled "$state" || return 0
+    log "$unit is still '$state' after disable (vendor/global symlink); masking it"
+    CHANGES+=1
+    act systemctl --user mask --now "$unit"
+}
+
+# ssh-agent.socket has 'ExecStopPre=systemctl --user unset-environment SSH_AUTH_SOCK', so stopping
+# it drops the variable from the user manager even though gcr-ssh-agent.socket set it; put the
+# gcr socket back so units and new sessions started before the next login still find the agent
+function step_restore_auth_sock() {
+    local gcr_socket="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/gcr/ssh" env_dump
+    (( APPLY == 1 )) || return 0
+    [[ -S "$gcr_socket" ]] || return 0
+    env_dump="$(systemctl --user show-environment 2>/dev/null)" || true
+    [[ $'\n'"$env_dump" != *$'\nSSH_AUTH_SOCK='* ]] || return 0
+    log "SSH_AUTH_SOCK missing from the systemd --user environment; restoring $gcr_socket"
+    act systemctl --user set-environment "SSH_AUTH_SOCK=$gcr_socket"
+}
+
+function step_files() {
+    local askpass="$HOME/.local/bin/ssh-askpass-keyring"
+    [[ -e "$askpass" ]] || return 0
+    CHANGES+=1
+    act rm -f -- "$askpass"
+}
+
+# prints the value of attribute <name> for every keyring item matching the given attribute
+# pairs, one per line. secret-tool writes 'attribute.*' lines to stderr and the item path,
+# label and secret value to stdout: only stderr is parsed, stdout is discarded unread
+function keyring_attribute() {
+    local name="$1"
+    shift
+    { secret-tool search --all "$@" 2>&1 >/dev/null || true; } \
+        | awk -v key="attribute.$name = " 'index($0, key) == 1 { print substr($0, length(key) + 1) }'
+}
+
+# prints the git-credential-scm binary: $SCM_AUTH_HELPER when set (used as is), else the copy
+# installed next to this script, else the one on PATH; fails when none is executable
+function scm_helper_path() {
+    local candidate
+    if [[ -n "${SCM_AUTH_HELPER:-}" ]]; then
+        candidate="$SCM_AUTH_HELPER"
+    else
+        candidate="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/git-credential-scm"
+        [[ -x "$candidate" ]] || candidate="$(command -v git-credential-scm || true)"
+    fi
+    [[ -n "$candidate" && -f "$candidate" && -x "$candidate" ]] || return 1
+    printf '%s\n' "$candidate"
+}
+
+# the 'SSH gitlab_ed25519' item of the old askpass workaround is not a git credential, so it is
+# cleared with secret-tool rather than the helper
+function step_ssh_key_item() {
+    if ! command -v secret-tool &>/dev/null; then
+        log "secret-tool not found; skipping the ssh-key=$LEGACY_SSH_KEY_ITEM keyring item"
+        return 0
+    fi
+    [[ -n "$(keyring_attribute ssh-key ssh-key "$LEGACY_SSH_KEY_ITEM")" ]] || return 0
+    CHANGES+=1
+    log "keyring item for ssh-key=$LEGACY_SSH_KEY_ITEM (askpass workaround) will be cleared"
+    act secret-tool clear ssh-key "$LEGACY_SSH_KEY_ITEM"
+}
+
+# tags/relabels the org.git.Password items and drops duplicates (incl. stale 'forge: <host>'
+# copies) through 'git-credential-scm retag', which previews unless --apply is given; its output
+# holds labels and attributes only, never secrets
+function step_retag() {
+    local helper output summary rc=0
+    local -a args=(retag)
+    if ! helper="$(scm_helper_path)"; then
+        log "warning: git-credential-scm not found (run ./install.sh scm-auth); keyring items not retagged"
+        PROBLEMS+=1
+        return 0
+    fi
+    # the action must be the helper's last argument
+    (( APPLY == 0 )) || args=(--apply retag)
+    output="$("$helper" "${args[@]}" </dev/null)" || rc=$?
+    [[ -z "$output" ]] || printf '%s\n' "$output"
+    if (( rc != 0 )); then
+        log "warning: '$helper ${args[*]}' failed (exit $rc); keyring items not retagged"
+        PROBLEMS+=1
+        return 0
+    fi
+    summary="${output##*$'\n'}"
+    if [[ "$summary" =~ ^retag:\ ([0-9]+)\ to\ update,\ ([0-9]+)\ duplicate ]] \
+        && (( BASH_REMATCH[1] + BASH_REMATCH[2] > 0 )); then
+        CHANGES+=1
+    fi
+}
+
+function step_keyring() {
+    if (( DO_KEYRING == 0 )); then
+        log "skipping keyring actions (--no-keyring)"
+        return 0
+    fi
+    step_ssh_key_item
+    step_retag
+}
+
+function main() {
+    while (( $# > 0 )); do
+        case "$1" in
+        --dry-run) APPLY=0 ;;
+        --apply) APPLY=1 ;;
+        --no-systemd) DO_SYSTEMD=0 ;;
+        --no-keyring) DO_KEYRING=0 ;;
+        -h | --help)
+            usage
+            return 0
+            ;;
+        *)
+            log "unknown argument: $1"
+            usage >&2
+            return 2
+            ;;
+        esac
+        shift
+    done
+    : "${HOME:?HOME is not set}"
+
+    trap '[[ -z "$WORK_DIR" ]] || rm -rf -- "$WORK_DIR" || true' EXIT
+    WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/scm-auth-migrate.XXXXXX")"
+
+    (( APPLY == 1 )) || log "dry run: nothing will be changed"
+    step_ssh_config
+    step_systemd
+    step_files
+    step_keyring
+    if (( APPLY == 0 )); then
+        (( PROBLEMS == 0 )) || log "dry run: $PROBLEMS step(s) could not be previewed (see the warnings above)"
+        if (( CHANGES > 0 )); then
+            log "dry run complete; re-run with --apply to perform these changes"
+        elif (( SYSTEMD_RUNS > 0 )); then
+            log "dry run: config, files and keyring already migrated; only idempotent systemd actions are planned"
+        else
+            log "dry run: config, files and keyring already migrated; nothing to change"
+        fi
+    elif (( PROBLEMS > 0 )); then
+        log "migration incomplete: $PROBLEMS step(s) failed (see the warnings above)"
+        return 1
+    elif (( CHANGES > 0 )); then
+        log "migration applied; verify with 'scm-auth-status'"
+    elif (( SYSTEMD_RUNS > 0 )); then
+        log "config/files/keyring already migrated; systemd actions re-applied (idempotent)"
+    else
+        log "config/files/keyring already migrated; no systemd actions run"
+    fi
+}
+
+main "$@"

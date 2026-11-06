@@ -1,0 +1,18 @@
+# scm-auth: HTTPS credential chain for git and every tool that reads git credentials
+# (mise use_git_credentials directly; forge --token-cmd and the hf shim via git-credential-token).
+# Installed to ~/.config/git/scm-auth.gitconfig and pulled in with include.path by the
+# scm-auth family; git-credential-scm (login keyring, items tagged application=scm-auth) is asked
+# first; only when the keyring has no entry, git-credential-scm-oauth runs git-credential-oauth, and
+# only for an interactive git (terminal, GIT_TERMINAL_PROMPT != 0; SCM_AUTH_OAUTH overrides), so
+# background callers never open browser tabs. Its result is stored back into the keyring by
+# git-credential-scm. Roll back with 'helper = libsecret' / 'helper = oauth'.
+# No per-host username for forges: git then gets the newest keyring item for the host whatever its
+# user (a PAT under your login or an OAuth token under 'oauth2'); a fixed username that differs
+# from the stored item's user makes the keyring miss and falls through to the OAuth browser flow.
+# Never put a token here.
+[credential]
+	helper = scm
+	helper = scm-oauth
+	useHttpPath = false
+[credential "https://huggingface.co"]
+	username = hf

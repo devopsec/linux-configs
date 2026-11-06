@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+#
+# Stub zig for the offline scm-auth installer tests (never builds anything): appends
+# '<cwd> <argv>' to $ZIG_STUB_LOG, answers 'zig version' with $ZIG_STUB_VERSION (default 0.17.0)
+# and, for 'zig build ... --prefix <dir>', writes a fake git-credential-scm into <dir>/bin.
+# ZIG_STUB_FAIL=1 makes the build fail without output files.
+
+set -Eeuo pipefail
+
+prefix=""
+printf '%s %s\n' "$PWD" "$*" >> "${ZIG_STUB_LOG:-/dev/null}"
+case "${1:-}" in
+version)
+    printf '%s\n' "${ZIG_STUB_VERSION:-0.17.0}"
+    ;;
+build)
+    shift
+    while (( $# > 0 )); do
+        case "$1" in
+        --prefix)
+            prefix="${2:-}"
+            shift
+            ;;
+        esac
+        shift
+    done
+    [[ -n "$prefix" ]] || { echo 'stub zig: --prefix missing' >&2; exit 2; }
+    [[ -z "${ZIG_STUB_FAIL:-}" ]] || { echo 'stub zig: build failed' >&2; exit 1; }
+    mkdir -p "$prefix/bin"
+    printf '#!/bin/sh\necho "fake git-credential-scm $*"\n' > "$prefix/bin/git-credential-scm"
+    chmod 0700 "$prefix/bin/git-credential-scm"
+    ;;
+*)
+    echo "stub zig: unsupported command '${1:-}'" >&2
+    exit 2
+    ;;
+esac

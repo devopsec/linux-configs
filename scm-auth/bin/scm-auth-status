@@ -1,0 +1,691 @@
+#!/usr/bin/env bash
+#
+# scm-auth-status: read-only report of the SSH agent topology and SCM host access, laid out as
+# titled sections of aligned status rows (✓ ok, ✗ problem, ! warning, • info, – skipped):
+#   SSH agents      the agent behind $SSH_AUTH_SOCK, key counts in gcr-ssh-agent vs gpg-agent,
+#                   agent-related user units and legacy workaround leftovers
+#   Hosts           per host: IdentityAgent pin ('ssh -G'), the 'ssh -T' account (as the User the
+#                   ssh config sets for the host, else git) and a REST API identity call with the
+#                   keyring token
+#   Git HTTPS       the scm-auth include, the helper chain, the OAuth guard (and the background
+#                   OAuth requests it skipped, from the journal), mise use_git_credentials, the
+#                   git-credential-scm helper (path, version, tagged/untagged item counts)
+#   Clients         forge token source, hf shim, gcli retired, plaintext token files
+#   Tokens          (--credentials) whether a token is stored per host
+# then a 'Next steps' list with one command per problem and a summary line. Never prints key
+# material, tokens or keyring secret values.
+#
+
+function usage() {
+    cat <<'EOF'
+Usage: scm-auth-status [--no-network] [--credentials] [host...]
+
+Report which SSH agent SCM hosts use, whether each host accepts the agent's keys over SSH and
+the keyring token over its REST API, and how git HTTPS credentials are wired.
+
+  --no-network   skip the 'ssh -T' and API checks
+  --credentials  report per host whether the keyring holds a git HTTPS token ('stored'/'none',
+                 never the value; queries git-credential-scm via git-credential-token)
+  -h, --help     show this help
+  host...        hosts to check (default: github.com gitlab.com gitea.com codeberg.org
+                 bitbucket.org tangled.org hf.co gitlab.gnome.org salsa.debian.org);
+                 Hugging Face serves SSH on hf.co only (its API token is stored for huggingface.co)
+
+'ssh -T' logs in as the User your ssh config sets for the host (e.g. your atproto handle for
+tangled.org, whose knots identify keys by it), else as git. The API check reads the token with
+'git-credential-scm get' (keyring only, never the OAuth browser flow), passes it to curl on stdin
+and prints only the account name and token type.
+
+Environment:
+  SCM_AUTH_HELPER  git-credential-scm binary to report (default: next to this script, then PATH)
+  NO_COLOR         disable colours (also off when stdout is not a terminal or TERM=dumb)
+EOF
+}
+
+set -Eeuo pipefail
+shopt -s inherit_errexit nullglob
+[[ "${DEBUG:-0}" == 1 ]] && set -x
+
+DEFAULT_HOSTS=(github.com gitlab.com gitea.com codeberg.org bitbucket.org tangled.org hf.co
+    gitlab.gnome.org salsa.debian.org)
+API_TIMEOUT=15
+PROBE_DIR=""
+# hard cap per 'ssh -T' probe: a host resolving to many addresses that drop port 22 would
+# otherwise take ConnectTimeout x addresses x ConnectionAttempts
+SSH_PROBE_TIMEOUT=5
+# literal: compared with the include.path value, which git expands itself
+# shellcheck disable=SC2088
+SCM_AUTH_INCLUDE='~/.config/git/scm-auth.gitconfig'
+EXPECTED_CHAIN=scm,scm-oauth
+MISE_FORGES=(github gitlab forgejo)
+LABEL_WIDTH=22
+declare -i NETWORK=1 CREDENTIALS=0 PROBLEMS=0
+# 'Next steps' entries: '<fail|warn|info><TAB><subject><TAB><what to do>'
+declare -a FIXES=()
+# glyphs and colours, set by style_init
+G_OK='' G_FAIL='' G_WARN='' G_INFO='' G_SKIP='' ELLIPSIS='' ARROW=''
+C_OK='' C_FAIL='' C_WARN='' C_DIM='' C_BOLD='' C_HEAD='' C_RESET=''
+
+function log() { printf '%s scm-auth-status: %s\n' "$(date -Iseconds)" "$*" >&2; }
+
+# Unicode glyphs in a UTF-8 locale (ASCII otherwise); colours only on a terminal, without NO_COLOR
+function style_init() {
+    local charset="${LC_ALL:-${LC_CTYPE:-${LANG:-}}}"
+    if [[ "$charset" =~ [Uu][Tt][Ff]-?8 ]]; then
+        G_OK='✓' G_FAIL='✗' G_WARN='!' G_INFO='•' G_SKIP='–' ELLIPSIS='…' ARROW='→'
+    else
+        G_OK='+' G_FAIL='x' G_WARN='!' G_INFO='*' G_SKIP='-' ELLIPSIS='~' ARROW='->'
+    fi
+    if [[ -t 1 && -z "${NO_COLOR:-}" && "${TERM:-dumb}" != dumb ]]; then
+        C_OK=$'\e[32m' C_FAIL=$'\e[31m' C_WARN=$'\e[33m' C_DIM=$'\e[2m' C_BOLD=$'\e[1m'
+        C_HEAD=$'\e[1;36m' C_RESET=$'\e[0m'
+    fi
+}
+
+# coloured glyph of a state: ok, fail, warn, info, anything else is 'skipped'
+function glyph() {
+    case "$1" in
+    ok) printf '%s%s%s' "$C_OK" "$G_OK" "$C_RESET" ;;
+    fail) printf '%s%s%s' "$C_FAIL" "$G_FAIL" "$C_RESET" ;;
+    warn) printf '%s%s%s' "$C_WARN" "$G_WARN" "$C_RESET" ;;
+    info) printf '%s%s%s' "$C_DIM" "$G_INFO" "$C_RESET" ;;
+    *) printf '%s%s%s' "$C_DIM" "$G_SKIP" "$C_RESET" ;;
+    esac
+}
+
+function heading() { printf '\n%s%s%s\n' "$C_HEAD" "$1" "$C_RESET"; }
+
+# records a 'Next steps' entry; fail entries count as a problem
+function add_fix() {
+    [[ "$1" != fail ]] || PROBLEMS+=1
+    [[ -z "$3" ]] || FIXES+=("$1"$'\t'"$2"$'\t'"$3")
+}
+
+# item <state> <label> <value> [dim note] [fix]: one aligned status row; fail is a problem and
+# fail/warn rows with a fix add it to 'Next steps'
+function item() {
+    local state="$1" label="$2" value="$3" note="${4:-}" fix="${5:-}"
+    printf '  %s %-*s %s%s\n' "$(glyph "$state")" "$LABEL_WIDTH" "$label" "$value" \
+        "${note:+  $C_DIM$note$C_RESET}"
+    case "$state" in
+    fail) add_fix fail "$label" "$fix" ;;
+    warn) [[ -z "$fix" ]] || add_fix warn "$label" "$fix" ;;
+    esac
+}
+
+function agent_kind() {
+    case "$1" in
+    */gcr/ssh) printf 'gcr-ssh-agent' ;;
+    */gnupg/*) printf 'gpg-agent' ;;
+    *openssh_agent* | */ssh-agent* | */agent.*) printf 'ssh-agent' ;;
+    '') printf 'none' ;;
+    *) printf 'unknown' ;;
+    esac
+}
+
+# prints the number of identities in the agent at <socket>, or a short reason
+function agent_key_count() {
+    local socket="$1" listing="" rc=0
+    if [[ -z "$socket" || ! -S "$socket" ]]; then
+        printf 'no socket'
+        return 0
+    fi
+    listing="$(SSH_AUTH_SOCK="$socket" ssh-add -l 2>/dev/null)" || rc=$?
+    case "$rc" in
+    0) grep -c . <<<"$listing" || true ;;
+    1) printf '0' ;;
+    *) printf 'unreachable' ;;
+    esac
+}
+
+# '<n> keys' for a numeric count, else the reason as is
+function keys_text() {
+    if [[ "$1" =~ ^[0-9]+$ ]]; then printf '%s key%s' "$1" "$([[ "$1" == 1 ]] || printf s)"; else printf '%s' "$1"; fi
+}
+
+function section_agents() {
+    local gcr_socket="${XDG_RUNTIME_DIR:-/run/user/$UID}/gcr/ssh" gpg_socket="" kind
+    heading 'SSH agents'
+    kind="$(agent_kind "${SSH_AUTH_SOCK:-}")"
+    if [[ "$kind" == gcr-ssh-agent ]]; then
+        item ok SSH_AUTH_SOCK "$kind" "$SSH_AUTH_SOCK"
+    else
+        item fail SSH_AUTH_SOCK "$kind" "${SSH_AUTH_SOCK:-<unset>}" \
+            'SSH_AUTH_SOCK should be gcr-ssh-agent (/run/user/$UID/gcr/ssh); check gcr-ssh-agent.socket and your shell profile'
+    fi
+    if command -v ssh-add &>/dev/null; then
+        item info gcr-ssh-agent "$(keys_text "$(agent_key_count "$gcr_socket")")" "$gcr_socket"
+        if command -v gpgconf &>/dev/null; then
+            gpg_socket="$(gpgconf --list-dirs agent-ssh-socket 2>/dev/null || true)"
+            item info gpg-agent "$(keys_text "$(agent_key_count "$gpg_socket")")" "${gpg_socket:-<unknown>}"
+        fi
+    else
+        item skip 'agent keys' 'ssh-add not found'
+    fi
+}
+
+function section_units() {
+    local unit state
+    command -v systemctl &>/dev/null || return 0
+    for unit in gcr-ssh-agent.socket ssh-agent.socket ssh-agent.service ssh-add-gitlab.service; do
+        state="$(systemctl --user is-enabled "$unit" 2>/dev/null)" || true
+        state="${state%%$'\n'*}"
+        state="${state:-not-found}"
+        case "$unit:$state" in
+        gcr-ssh-agent.socket:enabled*) item ok "$unit" "$state" ;;
+        gcr-ssh-agent.socket:*) item warn "$unit" "$state" 'provides SSH_AUTH_SOCK' 'systemctl --user enable --now gcr-ssh-agent.socket' ;;
+        ssh-agent.socket:enabled*)
+            item fail "$unit" "$state" 'still starts at login' 'scm-auth-migrate --apply (masks ssh-agent.socket)' ;;
+        ssh-add-gitlab.service:not-found) item ok "$unit" 'removed' ;;
+        ssh-add-gitlab.service:*) item warn "$unit" "$state" 'legacy workaround' 'scm-auth-migrate --apply' ;;
+        *) item ok "$unit" "$state" ;;
+        esac
+    done
+}
+
+function section_legacy() {
+    local path
+    local -i found=0
+    for path in "$HOME/.config/systemd/user/ssh-add-gitlab.service" "$HOME/.local/bin/ssh-askpass-keyring"; do
+        [[ -e "$path" ]] || continue
+        item fail 'legacy leftover' "${path/#"$HOME"/\~}" '' 'scm-auth-migrate --apply'
+        found+=1
+    done
+    (( found > 0 )) || item ok 'legacy leftovers' 'none'
+}
+
+# prints 'true' when <toml> sets use_git_credentials = true for settings.<forge>, either in a
+# [settings.<forge>] table or as a dotted key; prints 'unset' otherwise
+function mise_git_credentials() {
+    awk -v forge="$2" '
+        { line = $0; sub(/#.*/, "", line); gsub(/[ \t]/, "", line) }
+        line ~ /^\[/ { table = line; next }
+        table == "[settings." forge "]" && line == "use_git_credentials=true" { found = 1 }
+        table == "[settings]" && line == forge ".use_git_credentials=true" { found = 1 }
+        table == "" && line == "settings." forge ".use_git_credentials=true" { found = 1 }
+        END { print (found ? "true" : "unset") }
+    ' "$1"
+}
+
+# number of OAuth browser flows git-credential-scm-oauth skipped for background callers in the
+# last 24h (user journal, tag scm-auth); prints nothing when the journal is unavailable
+function oauth_skips() {
+    local lines
+    command -v journalctl &>/dev/null || return 0
+    lines="$(timeout 5 journalctl --user -t scm-auth --since -24h -o cat --no-pager -q 2>/dev/null)" || return 0
+    grep -c 'not starting the OAuth browser flow' <<<"$lines" || true
+}
+
+function section_git() {
+    local helpers="" forge state skips mode="${SCM_AUTH_OAUTH:-tty}"
+    local mise_config="${XDG_CONFIG_HOME:-$HOME/.config}/mise/config.toml"
+    heading 'Git HTTPS credentials'
+    if command -v git &>/dev/null; then
+        if git config --global --get-all include.path 2>/dev/null | grep -qxF -- "$SCM_AUTH_INCLUDE"; then
+            item ok include "$SCM_AUTH_INCLUDE"
+        else
+            item fail include "missing $SCM_AUTH_INCLUDE" '' './install.sh scm-auth'
+        fi
+        # --includes: the effective chain, with the helpers supplied by the include
+        helpers="$(git config --global --includes --get-all credential.helper 2>/dev/null | paste -sd ',' - || true)"
+        if [[ "$helpers" == "$EXPECTED_CHAIN" ]]; then
+            item ok 'helper chain' "${helpers//,/ $ARROW }"
+        else
+            item fail 'helper chain' "${helpers:-<none>}" "expected ${EXPECTED_CHAIN//,/ $ARROW }" './install.sh scm-auth'
+        fi
+    else
+        item skip git 'not found'
+    fi
+    case "$mode" in
+    tty) item ok 'oauth fallback' 'terminal only' 'SCM_AUTH_OAUTH=tty: no browser tabs for background callers' ;;
+    device) item ok 'oauth fallback' 'terminal only, device code' 'SCM_AUTH_OAUTH=device' ;;
+    never) item info 'oauth fallback' 'disabled' 'SCM_AUTH_OAUTH=never: add tokens with scm-auth-login' ;;
+    *) item warn 'oauth fallback' "SCM_AUTH_OAUTH=$mode" 'background callers may open browser tabs' 'unset SCM_AUTH_OAUTH' ;;
+    esac
+    skips="$(oauth_skips)"
+    if [[ -n "$skips" ]]; then
+        if (( skips > 0 )); then
+            item warn 'oauth skipped (24h)' "$skips background request(s) missed the keyring" 'journalctl --user -t scm-auth' \
+                'see which host/caller: journalctl --user -t scm-auth --since -24h; then: scm-auth-login --store-token <host>'
+        else
+            item ok 'oauth skipped (24h)' 'none'
+        fi
+    fi
+    if [[ -f "$mise_config" ]]; then
+        for forge in "${MISE_FORGES[@]}"; do
+            state="$(mise_git_credentials "$mise_config" "$forge")"
+            if [[ "$state" == true ]]; then
+                item ok "mise $forge" 'use_git_credentials'
+            else
+                item fail "mise $forge" "use_git_credentials $state" '' "set settings.$forge.use_git_credentials = true in $mise_config"
+            fi
+        done
+    else
+        item skip mise "config not found ($mise_config)"
+    fi
+}
+
+# prints the git-credential-scm binary: $SCM_AUTH_HELPER when set (used as is), else the copy
+# installed next to this script, else the one on PATH; fails when none is executable
+function scm_helper_path() {
+    local candidate
+    if [[ -n "${SCM_AUTH_HELPER:-}" ]]; then
+        candidate="$SCM_AUTH_HELPER"
+    else
+        candidate="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/git-credential-scm"
+        [[ -x "$candidate" ]] || candidate="$(command -v git-credential-scm || true)"
+    fi
+    [[ -n "$candidate" && -f "$candidate" && -x "$candidate" ]] || return 1
+    printf '%s\n' "$candidate"
+}
+
+# prints the number of items '<helper> [--all] list' reports; 'list' prints one line per item
+# (time, label, attributes; never secrets), which is only counted here, not shown
+function helper_item_count() {
+    local output
+    output="$("$@" list </dev/null 2>/dev/null)" || return 1
+    grep -c . <<<"$output" || true
+}
+
+# git-credential-scm: path, version and how many org.git.Password items carry application=scm-auth
+function section_helper() {
+    local helper version tagged all
+    if ! helper="$(scm_helper_path)"; then
+        item fail git-credential-scm missing '' './install.sh scm-auth'
+        return 0
+    fi
+    version="$("$helper" --version </dev/null 2>/dev/null | head -n 1)" || version=""
+    item ok git-credential-scm "${version:-version unknown}" "${helper/#"$HOME"/\~}"
+    if ! tagged="$(helper_item_count "$helper")" || ! all="$(helper_item_count "$helper" --all)"; then
+        item fail 'keyring items' 'list failed' 'session bus or keyring unavailable' 'unlock the login keyring (seahorse), then re-run'
+        return 0
+    fi
+    if (( all > tagged )); then
+        item fail 'keyring items' "$tagged tagged, $(( all - tagged )) untagged" 'application=scm-auth' 'scm-auth-migrate --apply'
+    else
+        item ok 'keyring items' "$tagged tagged, 0 untagged" 'application=scm-auth'
+    fi
+}
+
+# true when <file> carries the scm-auth shim marker within its first lines
+function is_shim() {
+    head -n 5 -- "$1" 2>/dev/null | grep -qxF -- '# scm-auth shim'
+}
+
+# forge/hf/gcli wiring; only counts 'token =' lines and parses 'forge auth status', which shows
+# token sources (env/config/cmd), never values
+function section_clients() {
+    local forge_config="${XDG_CONFIG_HOME:-$HOME/.config}/forge/config" plaintext first_hf path line
+    local status_lines="" fhost source
+    local hf_home="${HF_HOME:-${XDG_CACHE_HOME:-$HOME/.cache}/huggingface}"
+    heading 'Clients'
+    if [[ -f "$forge_config" ]]; then
+        plaintext="$(grep -cE '^[[:space:]]*token[[:space:]]*=' "$forge_config" || true)"
+        if (( plaintext > 0 )); then
+            item fail 'forge config' "$plaintext plaintext token line(s)" "${forge_config/#"$HOME"/\~}" 'scm-auth-login <domain>'
+        else
+            item ok 'forge config' 'no plaintext token' "${forge_config/#"$HOME"/\~}"
+        fi
+    else
+        item skip 'forge config' 'absent'
+    fi
+    if command -v forge &>/dev/null; then
+        if status_lines="$(forge auth status </dev/null 2>/dev/null | sort)"; then
+            while IFS= read -r line; do
+                [[ -n "$line" ]] || continue
+                fhost="${line%%:*}" source="${line#*: }"
+                # 'token from config (cmd: <command>)' -> 'token from config (cmd)'
+                source="${source/(cmd: *)/(cmd)}"
+                if [[ "$source" == 'no token' ]]; then
+                    item skip "forge $fhost" 'no token'
+                else
+                    item ok "forge $fhost" "$source"
+                fi
+            done <<<"$status_lines"
+        else
+            item fail forge 'auth status failed' '' 'forge auth status'
+        fi
+    else
+        item skip forge 'not installed'
+    fi
+    first_hf="$(type -P hf || true)"
+    if [[ -z "$first_hf" ]]; then
+        item skip hf 'not installed'
+    elif is_shim "$first_hf"; then
+        item ok hf 'scm-auth shim first on PATH' "${first_hf/#"$HOME"/\~}"
+    else
+        item fail hf "${first_hf/#"$HOME"/\~} first on PATH" 'not the scm-auth shim; HF_TOKEN not from the keyring' \
+            'put ~/.local/bin before the mise shims on PATH (~/.profile)'
+    fi
+    for path in "${HF_TOKEN_PATH:-$hf_home/token}" "$hf_home/stored_tokens"; do
+        [[ -e "$path" ]] || continue
+        item fail 'hf token file' "plaintext ${path/#"$HOME"/\~}" '' 'scm-auth-login hf'
+    done
+    if command -v gcli &>/dev/null; then
+        item fail gcli "installed at $(command -v gcli)" 'retired' './install.sh -cp scm-auth, or remove the package'
+    else
+        item ok gcli 'absent' 'retired'
+    fi
+}
+
+# reports 'stored'/'none' per host; the token itself only ever goes to /dev/null via wc
+function section_credentials() {
+    local host token_cmd="" bytes
+    heading 'Keyring tokens'
+    token_cmd="$(command -v git-credential-token || true)"
+    [[ -n "$token_cmd" ]] || token_cmd="$(dirname "$(realpath -m "${BASH_SOURCE[0]}")")/git-credential-token"
+    if [[ ! -x "$token_cmd" ]]; then
+        item skip tokens 'git-credential-token not found'
+        return 0
+    fi
+    for host in "$@"; do
+        bytes="$("$token_cmd" "$host" 2>/dev/null | wc -c)" || bytes=0
+        if (( bytes > 0 )); then item ok "$host" 'token stored'; else item skip "$host" 'token none'; fi
+    done
+}
+
+# the SSH login for <host>: the User the ssh config sets for it, else git (the SCM convention);
+# ssh -G reports the local user name when nothing sets one
+# shellcheck disable=SC2329  # runs in a background probe subshell
+function ssh_user() {
+    local user
+    user="$(ssh -G "$1" 2>/dev/null | awk '$1 == "user" { print $2; exit }' || true)"
+    if [[ -z "$user" || "$user" == "${USER:-$(id -un)}" || ! "$user" =~ ^[A-Za-z0-9._@+-]+$ ]]; then
+        user=git
+    fi
+    printf '%s\n' "$user"
+}
+
+# prints the first non-empty output line of 'ssh -T', trimmed; output is a server greeting
+# shellcheck disable=SC2329  # runs in a background probe subshell
+function ssh_greeting() {
+    local host="$1" user="$2" output="" rc=0
+    local -a cmd=(ssh -T -o ConnectTimeout=8 -o ConnectionAttempts=1 -o BatchMode=yes
+        -o StrictHostKeyChecking=yes "$user@$host")
+    if command -v timeout &>/dev/null; then
+        cmd=(timeout -k 2 "$SSH_PROBE_TIMEOUT" "${cmd[@]}")
+    fi
+    output="$("${cmd[@]}" </dev/null 2>&1)" || rc=$?
+    (( rc != 124 )) || output="timed out after ${SSH_PROBE_TIMEOUT}s (port 22 unreachable?)"
+    output="$(grep -m 1 . <<<"$output" || true)"
+    output="${output%$'\r'}"
+    printf '%s\t%s\n' "$rc" "${output:0:120}"
+}
+
+# prints 'OK|FAIL<TAB>detail' for 'ssh -T <user>@<host>'; detail is the account name when the
+# greeting carries one, else the trimmed greeting
+# shellcheck disable=SC2329  # runs in a background probe subshell
+function ssh_probe() {
+    local host="$1" user rc greeting verdict=FAIL detail
+    user="$(ssh_user "$host")"
+    IFS=$'\t' read -r rc greeting < <(ssh_greeting "$host" "$user")
+    shopt -s nocasematch
+    # 'Hi anonymous' (Hugging Face) means no offered key is registered on the account
+    if [[ "$greeting" =~ (^hi |welcome|successfully authenticated|authenticated via|logged in) &&
+        ! "$greeting" =~ anonymous ]]; then
+        verdict=OK
+    fi
+    shopt -u nocasematch
+    detail="${greeting#"$user@$host: "}"
+    detail="${detail:-<no output, exit $rc>}"
+    # a Tangled knot greets every key with 'Hi there!'; it only identifies the key (and so allows
+    # pushes) when the login name is the atproto handle the key is published under
+    if [[ "$greeting" =~ ^Hi\ there!\ This\ is\ the\ ([^ ]+)\ knot ]]; then
+        verdict=FAIL
+        detail="key not identified by ${BASH_REMATCH[1]} (login '$user')"
+    elif [[ "$verdict" == OK ]]; then
+        if [[ "$greeting" =~ Welcome\ to\ GitLab,\ (@[^!]+)! ]]; then
+            detail="${BASH_REMATCH[1]}"
+        elif [[ "$greeting" =~ ^Hi\ there,\ ([^!]+)! || "$greeting" =~ ^Hi\ ([^!,]+)[!,] ]]; then
+            detail="${BASH_REMATCH[1]}"
+        elif [[ "$greeting" == *"authenticated via ssh key"* ]]; then
+            detail='key accepted'
+        fi
+    fi
+    printf '%s\t%s\n' "$verdict" "$detail"
+}
+
+# prints '<auth style> <url> <jq identity filter> <credential host>' (tab separated) for hosts
+# with a known REST identity endpoint; fails for hosts without one (tangled.org: AT Protocol)
+function api_endpoint() {
+    case "$1" in
+    github.com) printf 'bearer\thttps://api.github.com/user\t.login\tgithub.com\n' ;;
+    gitlab.com | gitlab.gnome.org | salsa.debian.org | gitlab.*)
+        printf 'private\thttps://%s/api/v4/user\t.username\t%s\n' "$1" "$1" ;;
+    gitea.com | codeberg.org) printf 'token\thttps://%s/api/v1/user\t.login\t%s\n' "$1" "$1" ;;
+    bitbucket.org) printf 'basic\thttps://api.bitbucket.org/2.0/user\t.username // .display_name\tbitbucket.org\n' ;;
+    hf.co | huggingface.co) printf 'bearer\thttps://huggingface.co/api/whoami-v2\t.name\thuggingface.co\n' ;;
+    *) return 1 ;;
+    esac
+}
+
+# prints 'OK|FAIL|-<TAB>detail' for the REST identity call of <host> with the keyring token.
+# The token stays in shell variables (xtrace off) and reaches curl only as a --config on stdin,
+# never argv; only the account name, the token type prefix and the HTTP status are printed.
+# shellcheck disable=SC2329  # runs in a background probe subshell
+function api_probe() {
+    local - host="$1" helper="$2" style url filter cred_host line user="" token="" config prefix=""
+    local body code identity message
+    set +x
+    if ! IFS=$'\t' read -r style url filter cred_host < <(api_endpoint "$host"); then
+        printf -- '-\tn/a (no token API)\n'
+        return 0
+    fi
+    if [[ -z "$helper" ]] || ! command -v curl &>/dev/null; then
+        printf -- '-\tskipped (needs git-credential-scm and curl)\n'
+        return 0
+    fi
+    while IFS= read -r line; do
+        case "$line" in
+        username=*) user="${line#username=}" ;;
+        password=*) token="${line#password=}" ;;
+        esac
+    done < <(printf 'protocol=https\nhost=%s\n\n' "$cred_host" | "$helper" get 2>/dev/null || true)
+    if [[ -z "$token" ]]; then
+        printf -- '-\tno token (%s)\n' "$cred_host"
+        return 0
+    fi
+    # a curl config value is double-quoted: refuse anything that could break out of it
+    if [[ "$token" == *[\"\\[:space:]]* || "$user" == *[\"\\[:space:]:]* ]]; then
+        printf 'FAIL\tstored token is not usable in an HTTP header\n'
+        return 0
+    fi
+    [[ "$token" =~ ^(gh[opsu]_|github_pat_|glpat-|hf_|ATATT|ATBB) ]] && prefix="${BASH_REMATCH[1]}"
+    case "$style" in
+    bearer) config="header = \"Authorization: Bearer $token\"" ;;
+    private) config="header = \"PRIVATE-TOKEN: $token\"" ;;
+    token) config="header = \"Authorization: token $token\"" ;;
+    basic) config="user = \"$user:$token\"" ;;
+    esac
+    token=""
+    body="$PROBE_DIR/body.$BASHPID"
+    code="$(printf '%s\n' "$config" | curl -sS -m "$API_TIMEOUT" -o "$body" -w '%{http_code}' --config - "$url" 2>/dev/null)" || true
+    config=""
+    identity="" message=""
+    if command -v jq &>/dev/null && [[ -s "$body" ]]; then
+        identity="$(jq -r "($filter) // empty" "$body" 2>/dev/null | head -n 1)" || identity=""
+        message="$(jq -r '[.message?, .error_description?, (.error? | if type == "object" then .message else . end)]
+            | map(select(type == "string" and . != "")) | .[0] // empty' "$body" 2>/dev/null | head -n 1)" || message=""
+    fi
+    rm -f -- "$body"
+    case "$code" in
+    2??) printf 'OK\t%s%s\n' "${identity:-HTTP $code}" "${prefix:+ ($prefix)}" ;;
+    000 | '') printf 'FAIL\tunreachable\n' ;;
+    *) printf 'FAIL\tHTTP %s%s\n' "$code" "${message:+: ${message:0:60}}" ;;
+    esac
+}
+
+# one background job per host: '<ssh verdict> <ssh detail> <api verdict> <api detail>'
+# shellcheck disable=SC2329  # runs in a background subshell
+function probe_host() {
+    local host="$1" helper="$2" ssh_line api_line
+    ssh_line="$(ssh_probe "$host")"
+    api_line="$(api_probe "$host" "$helper")"
+    printf '%s\t%s\n' "$ssh_line" "$api_line"
+}
+
+# probe verdict (OK, FAIL, PIN, -) -> glyph state
+function verdict_state() {
+    case "$1" in
+    OK) printf ok ;;
+    FAIL | PIN) printf fail ;;
+    *) printf skip ;;
+    esac
+}
+
+# prints '<glyph> <detail>' padded to <width> columns (cut with an ellipsis to fit); padding is
+# computed on the visible text, so colours and multi-byte glyphs never shift the columns
+function cell() {
+    local state="$1" detail="$2" width="$3" pad
+    (( ${#detail} + 2 <= width )) || detail="${detail:0:width-3}$ELLIPSIS"
+    pad=$(( width - 2 - ${#detail} ))
+    [[ "$state" == ok ]] || [[ "$state" == fail ]] || detail="$C_DIM$detail$C_RESET"
+    printf '%s %s%*s' "$(glyph "$state")" "$detail" "$pad" ''
+}
+
+# 'Next steps' entries for a host's failed or missing checks
+function host_hint() {
+    local host="$1" ssh_verdict="$2" ssh_detail="$3" api_verdict="$4" api_detail="$5" cred_host key user
+    # Tangled knots refuse or don't identify a key logged in as 'git' (the key is looked up by handle)
+    if [[ "$host" == tangled.org || "$host" == *.tangled.sh ]] && [[ "$ssh_detail" == *'Permission denied'* ]] &&
+        [[ "$(ssh_user "$host")" == git ]]; then
+        ssh_detail='key not identified'
+    fi
+    case "$ssh_verdict:$ssh_detail" in
+    FAIL:*'host key is known'*)
+        add_fix fail "$host ssh" "host key unknown; check the fingerprint, then: ssh -o StrictHostKeyChecking=accept-new -T git@$host" ;;
+    FAIL:'key not identified'*)
+        user="$(ssh_user "$host")"
+        add_fix fail "$host ssh" "the knot accepts any key but identifies it by the login name (now '$user'): set 'User <your-handle>' under 'Host $host' in ~/.ssh/config and use <your-handle>@$host:<repo> remotes (or url.insteadOf)" ;;
+    FAIL:*'Permission denied'* | FAIL:*anonymous*)
+        key="$(ssh -G "$host" 2>/dev/null | awk '$1 == "identityfile" { print $2; exit }' || true)"
+        # ssh -G prints IdentityFile unexpanded
+        key="${key/#\~/$HOME}" key="${key//\$\{HOME\}/$HOME}"
+        add_fix fail "$host ssh" "no offered key is registered; add ${key:-your key}.pub on the site" ;;
+    FAIL:*'timed out'*)
+        add_fix fail "$host ssh" "no answer on port 22; does it need a HostName (e.g. ssh.$host)?" ;;
+    FAIL:*) add_fix fail "$host ssh" "$ssh_detail" ;;
+    esac
+    cred_host="$(api_endpoint "$host" | cut -f 4)" || cred_host=""
+    case "$api_verdict:$api_detail" in
+    -:'no token'*) add_fix info "$host api" "no token; optional: scm-auth-login --user <user> --store-token $cred_host" ;;
+    FAIL:'HTTP 401'* | FAIL:'HTTP 403'*)
+        add_fix fail "$host api" "token rejected ($api_detail); create a new token, then: scm-auth-login --user <user> --store-token $cred_host" ;;
+    FAIL:*) add_fix fail "$host api" "$api_detail" ;;
+    esac
+}
+
+function section_hosts() {
+    local host agent helper="" agent_state agent_detail
+    local ssh_verdict ssh_detail api_verdict api_detail
+    local -i i width=4
+    local -a agents=()
+    heading 'Hosts'
+    for host in "$@"; do (( ${#host} <= width )) || width=${#host}; done
+    if (( NETWORK == 1 )); then
+        helper="$(scm_helper_path)" || helper=""
+        i=0
+        for host in "$@"; do
+            probe_host "$host" "$helper" > "$PROBE_DIR/host.$i" 2>/dev/null &
+            i+=1
+        done
+    fi
+    # 'ssh -G' is local and quick; it runs while the probes wait on the network
+    for host in "$@"; do
+        agents+=("$(ssh -G "$host" 2>/dev/null | awk '$1 == "identityagent" { $1 = ""; sub(/^ /, ""); print; exit }' || true)")
+    done
+    (( NETWORK == 0 )) || wait
+    printf '  %s%-*s  %-16s  %-30s  %s%s\n' "$C_BOLD" "$width" HOST AGENT SSH API "$C_RESET"
+    i=0
+    for host in "$@"; do
+        agent="${agents[i]}"
+        if [[ -n "$agent" ]]; then
+            agent_state=fail agent_detail="$(agent_kind "$agent") pin"
+            add_fix fail "$host agent" "IdentityAgent pinned to $agent; SCM hosts should use \$SSH_AUTH_SOCK (gcr-ssh-agent)"
+        else
+            agent_state=ok agent_detail="$(agent_kind "${SSH_AUTH_SOCK:-}")"
+        fi
+        ssh_verdict=- ssh_detail=skipped api_verdict=- api_detail=skipped
+        if (( NETWORK == 1 )); then
+            IFS=$'\t' read -r ssh_verdict ssh_detail api_verdict api_detail < "$PROBE_DIR/host.$i" ||
+                { ssh_verdict=FAIL ssh_detail='probe failed' api_verdict=FAIL api_detail='probe failed'; }
+            host_hint "$host" "$ssh_verdict" "$ssh_detail" "$api_verdict" "$api_detail"
+        fi
+        printf '  %-*s  %s  %s  %s\n' "$width" "$host" "$(cell "$agent_state" "$agent_detail" 16)" \
+            "$(cell "$(verdict_state "$ssh_verdict")" "$ssh_detail" 30)" \
+            "$(cell "$(verdict_state "$api_verdict")" "$api_detail" 60 | sed 's/[[:space:]]*$//')"
+        i+=1
+    done
+}
+
+# 'Next steps': problems first, then warnings and optional items
+function section_next_steps() {
+    local entry state subject text kind
+    local -i width=8
+    (( ${#FIXES[@]} > 0 )) || return 0
+    for entry in "${FIXES[@]}"; do
+        IFS=$'\t' read -r state subject text <<<"$entry"
+        (( ${#subject} <= width )) || width=${#subject}
+    done
+    heading 'Next steps'
+    for kind in fail warn info; do
+        for entry in "${FIXES[@]}"; do
+            IFS=$'\t' read -r state subject text <<<"$entry"
+            [[ "$state" == "$kind" ]] || continue
+            printf '  %s %-*s  %s\n' "$(glyph "$state")" "$width" "$subject" "$text"
+        done
+    done
+}
+
+function main() {
+    local -a hosts=()
+    while (( $# > 0 )); do
+        case "$1" in
+        --no-network) NETWORK=0 ;;
+        --credentials) CREDENTIALS=1 ;;
+        -h | --help)
+            usage
+            return 0
+            ;;
+        -*)
+            log "unknown option: $1"
+            usage >&2
+            return 2
+            ;;
+        *)
+            [[ "$1" =~ ^[A-Za-z0-9.-]+$ ]] || { log "invalid host: $1"; return 2; }
+            hosts+=("$1")
+            ;;
+        esac
+        shift
+    done
+    (( ${#hosts[@]} > 0 )) || hosts=("${DEFAULT_HOSTS[@]}")
+    : "${HOME:?HOME is not set}"
+    PROBE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/scm-auth-status.XXXXXX")"
+    trap 'rm -rf -- "$PROBE_DIR"' EXIT
+    style_init
+
+    printf '%sscm-auth status%s  %s%s@%s  %s%s\n' "$C_BOLD" "$C_RESET" "$C_DIM" "${USER:-$(id -un)}" \
+        "$(uname -n)" "$(date '+%Y-%m-%d %H:%M')" "$C_RESET"
+    section_agents
+    section_units
+    section_legacy
+    if command -v ssh &>/dev/null; then
+        section_hosts "${hosts[@]}"
+    else
+        heading 'Hosts'
+        item skip ssh 'not found; host checks skipped'
+    fi
+    section_git
+    section_helper
+    section_clients
+    (( CREDENTIALS == 0 )) || section_credentials "${hosts[@]}"
+    section_next_steps
+    if (( PROBLEMS == 0 )); then
+        printf '\n%s%s Summary: 0 problem(s)%s\n' "$C_OK" "$G_OK" "$C_RESET"
+    else
+        printf '\n%s%s Summary: %d problem(s)%s\n' "$C_FAIL" "$G_FAIL" "$PROBLEMS" "$C_RESET"
+    fi
+}
+
+main "$@"

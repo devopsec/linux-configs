@@ -1,0 +1,237 @@
+#!/usr/bin/env bash
+#
+# forge-gist: GitHub gists without gcli. 'list' and 'view' are 'forge api' calls (forge resolves
+# the github.com token itself, e.g. through 'token-cmd = git-credential-token github.com').
+# 'create' needs a nested JSON body ({"files": {...}}) that 'forge api -f KEY=VALUE' cannot
+# express, so it POSTs the jq-built body with curl; the token comes from GITHUB_TOKEN/GH_TOKEN
+# (same precedence as forge) or the keyring via git-credential-token and is handed to curl as a
+# config file on stdin, never on argv.
+#
+# Secret-handling script: it never traces. DEBUG is ignored on purpose and xtrace inherited
+# through SHELLOPTS (or 'bash -x') is switched off first.
+#
+
+set +x
+unset BASH_XTRACEFD GIT_TRACE GIT_TRACE2 GIT_TRACE2_EVENT GIT_TRACE2_PERF GIT_TRACE_CURL GIT_CURL_VERBOSE
+
+function usage() {
+    cat <<'EOF'
+Usage: forge-gist list [--limit N] [--json]
+       forge-gist view <id> [--json]
+       forge-gist create [-d DESCRIPTION] [--public] [-n NAME] [--json] <file>... | -
+
+  list     list your gists (id, visibility, description)
+  view     print the files of gist <id> (--json: the raw API response)
+  create   create a gist from files ('-' reads stdin; -n names a single file/stdin);
+           secret unless --public; prints the gist URL (--json: the raw API response)
+  -h, --help  show this help
+
+Environment:
+  FORGE_GIST_API_URL  API root used by 'create' (default https://api.github.com); must be https://
+                      (loopback http:// is accepted for tests); anything else is refused
+EOF
+}
+
+set -Eeuo pipefail
+shopt -s inherit_errexit nullglob
+
+GIST_HOST=github.com
+# 'forge api' needs a repository to pick the forge outside a git checkout; only the host part is
+# used for gist endpoints
+FORGE_REPO="$GIST_HOST/scm-auth/forge-gist"
+WORK=""
+
+function log() { printf '%s forge-gist: %s\n' "$(date -Iseconds)" "$*" >&2; }
+
+# shellcheck disable=SC2329 # invoked by the EXIT trap
+function cleanup() {
+    [[ -z "$WORK" ]] || rm -rf -- "$WORK"
+}
+trap cleanup EXIT
+
+function require() {
+    local tool
+    for tool in "$@"; do
+        command -v "$tool" &>/dev/null || { log "missing dependency: $tool"; return 1; }
+    done
+}
+
+function forge_api() {
+    forge api -R "$FORGE_REPO" "$@"
+}
+
+# the bearer token only ever goes to https:// (or to a loopback http:// URL used by the tests);
+# anything else is refused before a token is read
+function check_api_url() {
+    local url="$1" scheme authority rest loopback_re='^(127\.0\.0\.1|localhost|\[::1\])(:[0-9]+)?$'
+    local re='^(https|http)://([^/?#]*)(.*)$'
+    # the authority (up to the first '/', '?' or '#') must be a bare host, optionally with a port;
+    # '@' is refused because curl would read everything before it as userinfo
+    if [[ "$url" =~ $re ]]; then
+        scheme="${BASH_REMATCH[1]}"
+        authority="${BASH_REMATCH[2]}"
+        rest="${BASH_REMATCH[3]}"
+        if [[ -n "$authority" && "$authority" != *[[:space:]@]* && ( -z "$rest" || "$rest" == /* ) ]]; then
+            if [[ "$scheme" == https ]] || [[ "$authority" =~ $loopback_re ]]; then
+                return 0
+            fi
+        fi
+    fi
+    log "refusing FORGE_GIST_API_URL '$url': only https:// (or loopback http:// for tests) is allowed"
+    return 2
+}
+
+function cmd_list() {
+    local limit=30 json=0
+    while (( $# > 0 )); do
+        case "$1" in
+        --limit)
+            [[ "${2:-}" =~ ^[0-9]+$ ]] || { log '--limit needs a number'; return 2; }
+            limit="$2"
+            shift
+            ;;
+        --json) json=1 ;;
+        *) log "unknown list argument: $1"; return 2 ;;
+        esac
+        shift
+    done
+    require forge
+    if (( json == 1 )); then
+        forge_api "/gists?per_page=$limit"
+        return 0
+    fi
+    require jq
+    forge_api "/gists?per_page=$limit" \
+        | jq -r '.[] | [.id, (if .public then "public" else "secret" end), (.description // "")] | @tsv'
+}
+
+function cmd_view() {
+    local id="" json=0
+    while (( $# > 0 )); do
+        case "$1" in
+        --json) json=1 ;;
+        -*) log "unknown view option: $1"; return 2 ;;
+        *)
+            [[ -z "$id" ]] || { log "unexpected argument: $1"; return 2; }
+            id="$1"
+            ;;
+        esac
+        shift
+    done
+    [[ "$id" =~ ^[A-Za-z0-9]+$ ]] || { log 'view needs a gist id'; return 2; }
+    require forge
+    if (( json == 1 )); then
+        forge_api "/gists/$id"
+        return 0
+    fi
+    require jq
+    forge_api "/gists/$id" | jq -r '.files[] | "==> \(.filename) <==\n\(.content)"'
+}
+
+# github token with forge's precedence: GITHUB_TOKEN, GH_TOKEN, then the keyring
+function github_token() {
+    local helper
+    if [[ -n "${GITHUB_TOKEN:-}" ]]; then printf '%s\n' "$GITHUB_TOKEN"; return 0; fi
+    if [[ -n "${GH_TOKEN:-}" ]]; then printf '%s\n' "$GH_TOKEN"; return 0; fi
+    helper="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/git-credential-token"
+    [[ -x "$helper" ]] || helper="$(command -v git-credential-token || true)"
+    [[ -n "$helper" ]] || return 1
+    "$helper" "$GIST_HOST" 2>/dev/null
+}
+
+function cmd_create() {
+    local description="" public=false name="" json=0 path file_name token="" api rc=0
+    local -a files=()
+    local -A seen=()
+    while (( $# > 0 )); do
+        case "$1" in
+        -d | --description)
+            (( $# > 1 )) || { log "$1 needs a value"; return 2; }
+            description="$2"
+            shift
+            ;;
+        --public) public=true ;;
+        -n | --name)
+            (( $# > 1 )) || { log "$1 needs a value"; return 2; }
+            name="$2"
+            shift
+            ;;
+        --json) json=1 ;;
+        --)
+            shift
+            files+=("$@")
+            break
+            ;;
+        -) files+=(-) ;;
+        -*) log "unknown create option: $1"; return 2 ;;
+        *) files+=("$1") ;;
+        esac
+        shift
+    done
+    (( ${#files[@]} > 0 )) || { log 'create needs at least one file (or - for stdin)'; return 2; }
+    [[ -z "$name" ]] || (( ${#files[@]} == 1 )) || { log '-n/--name applies to a single file only'; return 2; }
+    [[ "$name" != */* ]] || { log 'gist file names cannot contain /'; return 2; }
+    require jq curl
+    api="${FORGE_GIST_API_URL:-https://api.github.com}"
+    check_api_url "$api" || return 2
+
+    WORK="$(mktemp -d /tmp/forge-gist.XXXXXX)"
+    jq -n --arg d "$description" --argjson p "$public" '{description: $d, public: $p, files: {}}' > "$WORK/body.json"
+    for path in "${files[@]}"; do
+        if [[ "$path" == - ]]; then
+            cat > "$WORK/stdin"
+            file_name="${name:-gistfile1.txt}"
+            path="$WORK/stdin"
+        else
+            [[ -f "$path" && -r "$path" ]] || { log "not a readable file: $path"; return 1; }
+            file_name="${name:-${path##*/}}"
+        fi
+        [[ -z "${seen[$file_name]:-}" ]] || { log "duplicate gist file name: $file_name"; return 2; }
+        seen[$file_name]=1
+        jq --arg n "$file_name" --rawfile c "$path" '.files[$n] = {content: $c}' "$WORK/body.json" > "$WORK/next.json"
+        mv -- "$WORK/next.json" "$WORK/body.json"
+    done
+
+    token="$(github_token)" || token=""
+    [[ -n "$token" ]] || { log "no token for $GIST_HOST (scm-auth-login $GIST_HOST, or set GITHUB_TOKEN)"; return 1; }
+    [[ "$token" =~ ^[A-Za-z0-9._-]+$ ]] || { log 'unexpected characters in the github token; refusing'; return 1; }
+    # the Authorization header travels as a curl config on stdin, so it never shows up in argv
+    printf 'header = "Authorization: Bearer %s"\n' "$token" \
+        | curl --silent --show-error --fail-with-body --config - \
+            -X POST \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            -H 'Content-Type: application/json' \
+            --data-binary "@$WORK/body.json" \
+            "${api%/}/gists" > "$WORK/response.json" || rc=$?
+    token=""
+    if (( rc != 0 )); then
+        log "creating the gist failed (curl exit $rc)"
+        cat -- "$WORK/response.json" >&2
+        return 1
+    fi
+    if (( json == 1 )); then
+        cat -- "$WORK/response.json"
+    else
+        jq -r '.html_url' "$WORK/response.json"
+    fi
+}
+
+function main() {
+    local command="${1:-}"
+    (( $# == 0 )) || shift
+    case "$command" in
+    list) cmd_list "$@" ;;
+    view) cmd_view "$@" ;;
+    create) cmd_create "$@" ;;
+    -h | --help)
+        usage
+        ;;
+    *)
+        usage >&2
+        return 2
+        ;;
+    esac
+}
+
+main "$@"
