@@ -104,7 +104,8 @@ function family_selected() {
 function family_hook() {
     local family="$1" hook="$2" function_name
     shift 2
-    function_name="${family}_${hook}"
+    # hyphenated families (e.g. scm-auth) map to underscore hook names (scm_auth_<hook>)
+    function_name="${family//-/_}_${hook}"
     declare -F "$function_name" >/dev/null || return 0
     "$function_name" "$@"
 }

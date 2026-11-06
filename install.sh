@@ -2,7 +2,7 @@
 
 # root entrypoint for the linux configs installer: sources the shared library and both
 # family installers, then installs the selected apps family by family. each family
-# (fonts, vim, neovim) can also be run on its own via its own install.sh
+# (fonts, vim, neovim, scm-auth) can also be run on its own via its own install.sh
 
 set -Eeuo pipefail
 shopt -s inherit_errexit nullglob
@@ -17,6 +17,8 @@ source "$REPO_ROOT_DIR/fonts/install.sh"
 source "$REPO_ROOT_DIR/vim/install.sh"
 # shellcheck source=neovim/install.sh
 source "$REPO_ROOT_DIR/neovim/install.sh"
+# shellcheck source=scm-auth/install.sh
+source "$REPO_ROOT_DIR/scm-auth/install.sh"
 
 setup_install "$@"
 
