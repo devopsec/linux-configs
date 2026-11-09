@@ -121,6 +121,10 @@ local servers = {
   clangd = "clangd",
   gopls = "gopls",
   rust_analyzer = "rust-analyzer",
+  zls = "zls",
+  -- mise config files (mise.toml, .mise.toml, mise/config.toml, ...); built into
+  -- mise >= 2026.10.18 and ignores every other TOML file
+  mise = "mise",
 }
 
 for name, cmd in pairs(servers) do

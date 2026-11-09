@@ -131,6 +131,7 @@ return {
         "vimdoc",
         "xml",
         "yaml",
+        "zig",
       },
     },
     -- @param opts lazyvim.TSConfig

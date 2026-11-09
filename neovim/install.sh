@@ -149,6 +149,8 @@ function neovim_install_plugins() {
                 echo "$(tag ERROR): '$nvim_app' plugin install exited non-zero" >&2
                 exit 1
             }
+            # headless nvim does not end its output with a newline
+            echo
             if grep -qE '^Error |Unmet requirements|E[0-9]+: ' "$nvim_log"; then
                 echo "$(tag ERROR): '$nvim_app' reported errors during plugin install (log: $nvim_log)" >&2
                 exit 1
@@ -163,10 +165,15 @@ function neovim_install_plugins() {
 }
 
 function neovim_post_install() {
-    cat <<'EOF'
-For editor and Git integration, consider setting EDITOR='nvim', VISUAL='nvim',
-and configuring nvimpager as PAGER/MANPAGER. See the README for the Git settings.
-EOF
+    local readme="https://github.com/devopsec/linux-configs/blob/main/README.md"
+    log_info "Neovim summary:"
+    app_selected nvim && echo "  - nvim: config in ~/.config/nvim; plugins via lazy.nvim; ':Info' opens Texinfo manuals (info.nvim)"
+    app_selected nvimgit && echo "  - nvimgit: Git editor/diff/merge config in ~/.config/nvimgit"
+    app_selected nvimpager && echo "  - nvimpager: pager config in ~/.config/nvimpager"
+    echo "  Shell setup (EDITOR/VISUAL/PAGER/MANPAGER): $readme#post-install-shell-configuration"
+    echo "  Git setup (editor, pager, difftool, mergetool): $readme#post-install-git-configuration"
+    echo "  Texinfo ('info') in nvim / as nvimpager:     $readme#texinfo-info-pages"
+    return 0
 }
 
 # blocks until nvim-treesitter has (re)built its parsers: its own build hook runs async and
@@ -185,6 +192,8 @@ function neovim_update_treesitter_parsers() {
         echo "$(tag ERROR): 'nvim' Treesitter parser update exited non-zero" >&2
         exit 1
     }
+    # headless nvim does not end its output with a newline
+    echo
     if grep -qE '^Error |E[0-9]+: ' "$nvim_log"; then
         echo "$(tag ERROR): 'nvim' reported errors during Treesitter parser update (log: $nvim_log)" >&2
         exit 1
