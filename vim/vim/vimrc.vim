@@ -30,6 +30,13 @@ set laststatus=0
 
 " |==================== vim-plug plugin manager config ==================|
 "
+" Neovim does not search ~/.vim by default, so vim-plug (and the plugins) would
+" not be found when 'vim' is provided by Neovim
+if has('nvim')
+  set runtimepath^=~/.vim
+  set runtimepath+=~/.vim/after
+endif
+
 " Check for vim-plug installation and download if not present
 if empty(glob('~/.vim/autoload/plug.vim'))
   silent !curl -fLo ~/.vim/autoload/plug.vim --create-dirs
@@ -53,7 +60,9 @@ Plug 'joshdick/onedark.vim'           " Onedark 24bit Color Scheme
 "Plug 'morhetz/gruvbox'               " GruvBox 24bit Color Scheme
 Plug 'ryanoasis/vim-devicons'         " NerdFont icons
 Plug 'Konfekt/vim-alias'              " Simplified command aliasing
+Plug 'HiPhish/info.vim'               " Read and navigate Texinfo (info) manuals
 Plug 'PanagiotisS/LargeFile'          " Improved performance for large files
+Plug 'prabirshrestha/vim-lsp'         " Language Server Protocol client
 
 call plug#end()
 filetype plugin indent on
@@ -277,6 +286,36 @@ set encoding=UTF-8
 " LargeFile Plugin Settings
 " minimum file size (in MB) to trigger optimizations
 let g:LargeFile = 1
+
+" vim-lsp Plugin Settings
+" mise config files (mise.toml, .mise.toml, mise/config.toml, ...) via the
+" language server built into mise; it ignores every other TOML file
+if executable('mise')
+    augroup LspMise
+        autocmd!
+        autocmd User lsp_setup call lsp#register_server({
+            \   'name': 'mise',
+            \   'cmd': {server_info -> ['mise', 'lsp']},
+            \   'allowlist': ['toml'],
+            \ })
+    augroup END
+endif
+
+" keymaps are only set in buffers with an LSP server attached
+function! s:on_lsp_buffer_enabled() abort
+    setlocal omnifunc=lsp#complete
+    nmap <buffer> gd <Plug>(lsp-definition)
+    nmap <buffer> gr <Plug>(lsp-references)
+    nmap <buffer> K <Plug>(lsp-hover)
+    nmap <buffer> <leader>ca <Plug>(lsp-code-action)
+    nmap <buffer> <leader>cr <Plug>(lsp-rename)
+    nmap <buffer> <F4> <Plug>(lsp-document-format)
+endfunction
+
+augroup LspBufferEnabled
+    autocmd!
+    autocmd User lsp_buffer_enabled call s:on_lsp_buffer_enabled()
+augroup END
 
 " Enable 24bit True Color
 if (empty($TMUX))
@@ -1199,7 +1238,9 @@ nnoremap <silent> <F1> :nohlsearch<CR>
 " <F2>                              toggle for insert paste mode
 " TODO: broken in neovim (use regular insert mode to paste)
 nnoremap <silent> <F2> :set invpaste<CR>
-set pastetoggle=<F2>
+if !has('nvim')
+    set pastetoggle=<F2>
+endif
 
 " <F3>                              to replace tabs/spaces w/ correct type
 nnoremap <silent> <F3> :RetabIndent<CR>

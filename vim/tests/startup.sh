@@ -56,7 +56,14 @@ function assert_clean_run() {
 }
 
 function test_vim() {
-    assert_clean_run vim vim --not-a-term -es --startuptime /dev/stdout -c 'qall!'
+    local -a flags=(-es)
+
+    # '--not-a-term' only exists in newer Vim
+    if vim -es -c "echo ~hash('patch-8.2.2663')" -c "qall!"; then
+        flags=(--not-a-term "${flags[@]}")
+    fi
+
+    assert_clean_run vim vim "${flags[@]}" --startuptime /dev/stdout -c 'qall!' </dev/null
 }
 
 test_vim

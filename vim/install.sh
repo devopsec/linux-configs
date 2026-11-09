@@ -93,7 +93,12 @@ function vim_clean_global() {
 }
 
 function vim_install_plugins() {
-    local -a vim_cmds
+    local -a vim_cmds vim_flags=(-i NONE -u ~/.vimrc -es)
+
+    # '--not-a-term' only exists in newer Vim; older builds reject it as an unknown option
+    if vim --not-a-term --version >/dev/null 2>&1; then
+        vim_flags=(--not-a-term "${vim_flags[@]}")
+    fi
 
     if (( CLEAN_CONFIGS == 1 )); then
         vim_cmds=('+PlugInstall! --sync' '+w! /dev/stdout' +qa)
@@ -103,8 +108,8 @@ function vim_install_plugins() {
 
     if app_selected vim; then
         echo "$(tag INFO) Installing Vim editor plugins"
-        vim --not-a-term -i NONE -u ~/.vimrc -es "${vim_cmds[@]}" || true
-        vim --not-a-term -i NONE -u ~/.vimrc -es +PlugStatus '+w! /dev/stdout' +qa || {
+        vim "${vim_flags[@]}" "${vim_cmds[@]}" || true
+        vim "${vim_flags[@]}" +PlugStatus '+w! /dev/stdout' +qa || {
             echo "$(tag ERROR): Failed installing Vim plugins" >&2
             exit 1
         }
@@ -114,7 +119,12 @@ function vim_install_plugins() {
 }
 
 function vim_post_install() {
-    app_selected vimpager && log_info "Set PAGER='vimpager' and MANPAGER='vimpager -p' if you want to use the Vim pager."
+    local readme="https://github.com/devopsec/linux-configs/blob/main/README.md"
+    log_info "Vim summary:"
+    app_selected vim && echo "  - vim: config in ~/.vimrc; plugins via vim-plug; ':Info' opens Texinfo manuals (info.vim)"
+    app_selected vimpager && echo "  - vimpager: pager config in ~/.vimpagerrc (PAGER='vimpager', MANPAGER='vimpager -p')"
+    echo "  Shell setup: $readme#post-install-shell-configuration"
+    echo "  Texinfo ('info') in vim / as vimpager: $readme#texinfo-info-pages"
     return 0
 }
 
