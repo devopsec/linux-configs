@@ -87,29 +87,31 @@ and HTTPS tokens, so `git`, `ssh`, `mise`, `forge` and `hf` work right after log
 
 ```mermaid
 graph TD
-  PAM[pam_gnome_keyring at login] --> KR[login keyring / Secret Service]
-  KR --> GCR[gcr-ssh-agent  SSH_AUTH_SOCK]
-  KR --> LS[git-credential-scm]
-  GCR --> SSH[ssh / git over ssh]
-  LS --> GIT[git over https]
-  GUARD[git-credential-scm-oauth] -->|terminal only| OAUTH[git-credential-oauth]
-  OAUTH -->|first login only| LS
-  LS --> TOK[git-credential-token]
-  TOK --> FORGE[forge --token-cmd]
-  TOK --> HF[hf shim HF_TOKEN]
-  GIT --> MISE[mise use_git_credentials]
-  GPG[gpg-agent] --> SIGN[commit signing only]
+    PAM[pam_gnome_keyring at login] --> KR[login keyring / Secret Service]
+    KR --> GCR[gcr-ssh-agent SSH_AUTH_SOCK]
+    KR --> LS[git-credential-scm]
+    GCR --> SSH[ssh / git over ssh]
+    LS --> GIT[git over https]
+    GUARD[git-credential-scm-oauth] -->|terminal only| OAUTH[git-credential-oauth]
+    OAUTH -->|first login only| LS
+    LS --> TOK[git-credential-token]
+    TOK --> FORGE[forge --token-cmd]
+    TOK --> HF[hf shim HF_TOKEN]
+    GIT --> MISE[mise use_git_credentials]
+    GPG[gpg-agent] --> SIGN[commit signing only]
 ```
 
 - **One SSH agent:** `gcr-ssh-agent` (`$SSH_AUTH_SOCK`) serves every host; `gpg-agent` is only used for GPG/commit signing. The family installs
   `~/.ssh/config.d/10-scm-auth.conf` (`Match final tagged scm`: `IdentitiesOnly`, `BatchMode`, publickey only, no `IdentityAgent`) and makes
   `Include ~/.ssh/config.d/*.conf` the first line of `~/.ssh/config`. Per-host exceptions (e.g. an ops key that must stay in `gpg-agent`) go in
   your own drop-in such as `~/.ssh/config.d/90-ops.conf`.
-- **Migration (once, never run by the installer):** `scm-auth-migrate` (dry run by default) shows the `~/.ssh/config` diff and the planned unit/keyring
+- **Migration (once, never run by the installer):** `scm-auth-migrate` (dry run by default) shows the `~/.ssh/config` diff and the planned
+  unit/keyring
   actions; `scm-auth-migrate --apply` backs up `~/.ssh/config` (`config.bak.<timestamp>`), comments out every `IdentityAgent` pin and `IdentityFile`
   stubs without key material (a missing `*-sk` stub next to its plain sibling line is always commented out), enables `gcr-ssh-agent.socket`,
   disables `ssh-agent.socket`/`ssh-agent.service`/`ssh-add-gitlab.service` and masks `ssh-agent.socket` when a vendor symlink (Ubuntu's
-  `/etc/systemd/user/sockets.target.wants/ssh-agent.socket`) keeps it enabled (undo with `systemctl --user unmask ssh-agent.socket`; stopping it unsets `SSH_AUTH_SOCK` in the
+  `/etc/systemd/user/sockets.target.wants/ssh-agent.socket`) keeps it enabled (undo with `systemctl --user unmask ssh-agent.socket`; stopping it
+  unsets `SSH_AUTH_SOCK` in the
   systemd --user environment, so migrate sets it back to the gcr socket), deletes the
   `ssh-add-gitlab` unit and `~/.local/bin/ssh-askpass-keyring`, clears the `SSH gitlab_ed25519` keyring item (`secret-tool`; skipped with a
   notice when it is not installed) and runs `git-credential-scm --apply retag` (the dry run shows the `retag` preview). A missing or failing
@@ -175,7 +177,8 @@ graph TD
   pass `scm` explicitly and keep using `git-credential-scm`.
 - **Shared token:** `git-credential-token <host> [username]` prints only the stored token (exit 1 and no output when there is none). It asks the
   keyring alone (`git -c credential.helper= -c "credential.helper=<bin>/git-credential-scm --tool=${SCM_AUTH_TOOL:-git}" credential fill`, the
-  bare `scm` when no shell-safe absolute path is found; `SCM_AUTH_TOOL` must match `[a-z0-9_-]{1,32}`) with prompts disabled, so it never starts the OAuth
+  bare `scm` when no shell-safe absolute path is found; `SCM_AUTH_TOOL` must match `[a-z0-9_-]{1,32}`) with prompts disabled, so it never starts the
+  OAuth
   browser flow. `SCM_AUTH_CREDENTIAL_HELPER` overrides the helper for tests only. The script never traces: `DEBUG` is ignored and inherited
   xtrace (`SHELLOPTS`, `bash -x`) is switched off first, so the token cannot reach stderr.
 - **mise:** `~/.config/mise/config.toml` keeps `use_git_credentials = true` under `[settings.github]`, `[settings.gitlab]` and
@@ -191,15 +194,21 @@ graph TD
   attributed to `git` until `scm-auth-login <domain>` is run again.
 - **hf:** `scm-auth-login hf` reads the Hugging Face token from stdin (hidden prompt), stores it for `https://huggingface.co` (user `hf`,
   `scm --tool=hf`) and
-  deletes the plaintext `~/.cache/huggingface/token` (`HF_HOME`/`HF_TOKEN_PATH` honoured) and only reports `stored_tokens`, which may hold other named hf accounts not in the keyring: review it and delete it by hand. The `hf` shim in the scoped bin dir runs the first
-  other `hf` on `PATH` (copies/symlinks of the shim are skipped) with `HF_TOKEN` from `SCM_AUTH_TOOL=hf git-credential-token huggingface.co hf`, set for that
+  deletes the plaintext `~/.cache/huggingface/token` (`HF_HOME`/`HF_TOKEN_PATH` honoured) and only reports `stored_tokens`, which may hold other named
+  hf accounts not in the keyring: review it and delete it by hand. The `hf` shim in the scoped bin dir runs the first
+  other `hf` on `PATH` (copies/symlinks of the shim are skipped) with `HF_TOKEN` from `SCM_AUTH_TOOL=hf git-credential-token huggingface.co hf`, set
+  for that
   process only and only when `HF_TOKEN` is unset and a token is stored; otherwise the real `hf` runs unchanged. The shim must come before the real
   `hf` on `PATH`: `~/.local/bin` before mise shims or pipx/venv dirs. The installer never overwrites a foreign `hf` at the destination (it logs a
-  notice); set `SCM_AUTH_HF_SHIM_DIR` to a directory earlier on `PATH` and re-run. `-cc` deletes only `~/.cache/huggingface/token` and reports `stored_tokens` (it never removes it).
+  notice); set `SCM_AUTH_HF_SHIM_DIR` to a directory earlier on `PATH` and re-run. `-cc` deletes only `~/.cache/huggingface/token` and reports
+  `stored_tokens` (it never removes it).
 - **Gists, gcli retired:** `forge-gist list [--limit N] [--json]`, `forge-gist view <id> [--json]` call `forge api` (the forge token-cmd);
   `forge-gist create [-d DESC] [--public] [-n NAME] <file>... | -` creates a secret gist unless `--public`. `forge api` only sends flat
   `-f KEY=VALUE` fields, so create builds the body with `jq` and POSTs it with `curl`, passing the token (`GITHUB_TOKEN`, `GH_TOKEN`, else the
-  keyring) as a curl config on stdin. `FORGE_GIST_API_URL` must be `https://` (loopback `http://` is accepted for tests); anything else is refused before a token is read. `gcli` is replaced by `forge api` and `forge-gist`; `./install.sh -cp scm-auth` removes `gcli` from exactly the scoped bin dir, `~/.local/bin` and `/usr/local/bin/gcli` (sudo) plus `~/.config/gcli`. Any other copy on `PATH` (system package, homebrew, mise shims, nix, cargo) is only reported: remove it with its owner (`apt`/`pacman` for system packages, the tool's own uninstall otherwise).
+  keyring) as a curl config on stdin. `FORGE_GIST_API_URL` must be `https://` (loopback `http://` is accepted for tests); anything else is refused
+  before a token is read. `gcli` is replaced by `forge api` and `forge-gist`; `./install.sh -cp scm-auth` removes `gcli` from exactly the scoped bin
+  dir, `~/.local/bin` and `/usr/local/bin/gcli` (sudo) plus `~/.config/gcli`. Any other copy on `PATH` (system package, homebrew, mise shims, nix,
+  cargo) is only reported: remove it with its owner (`apt`/`pacman` for system packages, the tool's own uninstall otherwise).
 - **No tracing in token scripts:** `scm-auth-login`, the `hf` shim and `forge-gist` also ignore `DEBUG` and switch off inherited xtrace.
 - **Status:** `scm-auth-status` also reports plaintext `token =` lines in the forge config (count only), `forge auth status` (token sources,
   never values), whether the `hf` shim comes first on `PATH`, leftover hf token files and whether `gcli` is still installed.
@@ -223,7 +232,8 @@ Match final !tagged scm
 ```
 
 It sorts after `10-scm-auth.conf` and the `Include` is the first line of `~/.ssh/config`, so it applies to every untagged host that doesn't
-set its own `IdentityAgent`, while tagged SCM hosts keep `$SSH_AUTH_SOCK`. Use the socket from `gpgconf --list-dirs agent-ssh-socket` if it differs. Check with
+set its own `IdentityAgent`, while tagged SCM hosts keep `$SSH_AUTH_SOCK`. Use the socket from `gpgconf --list-dirs agent-ssh-socket` if it differs.
+Check with
 `ssh -G github.com | grep -i identityagent` (empty) and `ssh -G some-ops-host | grep -i identityagent` (the gpg socket). Delete the file to go
 fully single-agent once those keys live in gcr-ssh-agent.
 
@@ -240,7 +250,7 @@ third-party OAuth apps; it cannot be fixed locally.
 
 ## Post-Install Shell Configuration
 
-Add the following to `~/.bashrc` to wire up the installed apps:
+Add the following to `~/.profile` to wire up the installed apps:
 
 ```bash
 export PAGER='nvimpager'
@@ -248,6 +258,30 @@ export MANPAGER='nvimpager -p'
 export EDITOR='nvim'
 export VISUAL='nvim'
 ```
+
+## Texinfo (`info`) Pages
+
+GNU `info` has no `INFOPAGER` variable, so the pager cannot drive its interactive reader directly. Instead, `nvimpager` loads the manual with [info.nvim](https://github.com/ValdezFOmar/info.nvim), which keeps colors and node navigation.
+
+- **Shell function:** add to `~/.profile`. It opens the manual in `nvimpager` when run in a terminal, and falls back to the plain `info` otherwise:
+
+```bash
+info() {
+    if [[ -t 1 && $# -gt 0 && "$1" != -* ]]; then
+        local arg
+        local -a topic=()
+        for arg in "$@"; do topic+=("${arg// /\\ }"); done
+        nvimpager -- -c "Info ${topic[*]}" -c only
+    else
+        command info "$@"
+    fi
+}
+```
+
+- **Navigation in the pager:** `gn`/`gp`/`gu` go to the next, previous, and up node, `K` follows the reference under the cursor, `<BS>` goes back, and `q` quits.
+- **Inside `nvim`:** `:Info tar` opens a manual, and `:Info!` jumps to the entry under the cursor. `vim` gets the same behavior from [info.vim](https://github.com/HiPhish/info.vim).
+
+Requires the `info` binary (`texinfo` package). The `info.nvim` revision is pinned in `neovim/nvimpager/lua/plugins/tools.lua` because newer revisions need Neovim 0.12.
 
 ## Post-Install Git Configuration
 
@@ -293,7 +327,8 @@ vim/tests/startup.sh # vim
 | `claude-code/config/`      | `~/.claude`                | `settings.json`, `themes/`, `mcp/mcp.json`, `CLAUDE.{security,workdir}.md`; `skills`/`commands`/`custom` link to `resources/agent-configs/`   |
 
 Each agent dir has a `sync.sh` that installs **fresh copies** into the agent's home: top-level files are overwritten and each managed directory is
-mirrored, so files removed from the repo are deleted there too. Symlinks into `resources/agent-configs/` are resolved, `__pycache__/` is ignored, and runtime state
+mirrored, so files removed from the repo are deleted there too. Symlinks into `resources/agent-configs/` are resolved, `__pycache__/` is ignored, and
+runtime state
 outside the managed entries (sessions, logs, caches, credentials, history) is never touched. `-n` prints what would change or be deleted without
 writing anything.
 
