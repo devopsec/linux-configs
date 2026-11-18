@@ -217,7 +217,7 @@ function fonts_configure_home() {
     local rule
     run_as "$as_root" mkdir -p "$target_home/.config/fontconfig/conf.d"
     for rule in "$FONTCONFIG_SRC_DIR"/*.conf; do
-        install_file "$as_root" "$rule" "$target_home/.config/fontconfig/conf.d/${rule##*/}" -f
+        install_file "$as_root" "$rule" "$target_home/.config/fontconfig/conf.d/${rule##*/}"
     done
     return 0
 }
@@ -236,7 +236,7 @@ function fonts_configure_global() {
     local rule
     run_priv mkdir -p "$FONTCONFIG_GLOBAL_AVAIL" "$FONTCONFIG_GLOBAL_ENABLED"
     for rule in "$FONTCONFIG_SRC_DIR"/*.conf; do
-        install_file 1 "$rule" "$FONTCONFIG_GLOBAL_AVAIL/${rule##*/}" -f
+        install_file 1 "$rule" "$FONTCONFIG_GLOBAL_AVAIL/${rule##*/}"
         link_path 1 "$FONTCONFIG_GLOBAL_AVAIL/${rule##*/}" "$FONTCONFIG_GLOBAL_ENABLED/${rule##*/}"
     done
     return 0
