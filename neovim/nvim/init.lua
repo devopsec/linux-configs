@@ -17,6 +17,9 @@ require("setup.keymaps")
 -- Popup menu (completion, command-line, right-click) key handling
 require("setup.menus")
 
+-- Ctrl+click / Ctrl+hover on URLs, manpage, info and help references
+require("setup.links")
+
 -- Opaque, theme-derived popup/menu/console highlights
 require("setup.highlights")
 

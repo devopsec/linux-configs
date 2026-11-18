@@ -67,7 +67,7 @@ vim.opt.listchars = {
 vim.opt.mouse = "a"
 vim.opt.mousehide = true
 vim.opt.mousemodel = "popup_setpos"
-vim.opt.mousemoveevent = false
+-- 'mousemoveevent' is enabled by lua/setup/links.lua (Ctrl+hover underline)
 vim.opt.mousescroll = "ver:5,hor:10"
 
 -- Per-mode cursor shapes (block in normal/visual/select, vertical bar in

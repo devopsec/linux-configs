@@ -61,7 +61,7 @@ vim.opt.expandtab = true    -- Insert spaces when the Tab key is pressed
 vim.opt.mouse = "a"
 vim.opt.mousehide = true
 vim.opt.mousemodel = "popup_setpos"
-vim.opt.mousemoveevent = false
+-- 'mousemoveevent' is enabled by lua/setup/links.lua (Ctrl+hover underline)
 vim.opt.mousescroll = "ver:5,hor:10"
 vim.g.have_nerd_font = true
 
@@ -107,11 +107,12 @@ vim.opt.fillchars:append({
 vim.opt.termguicolors = true
 
 -- Keep a statusline for each pager split; there is no global statusline plugin.
--- Man pages drop it (and the end-of-buffer filler) so the footer is the last line.
+-- Man and info pages drop it (and the end-of-buffer filler) so the footer is the last line.
 local function apply_pager_view()
-  local is_man = vim.api.nvim_buf_get_name(0):match("^man://") ~= nil
-  vim.opt.laststatus = is_man and 0 or 2
-  vim.opt.fillchars:append({ eob = is_man and " " or "░" })
+  local name = vim.api.nvim_buf_get_name(0)
+  local is_doc = name:match("^man://") ~= nil or name:match("^info://") ~= nil
+  vim.opt.laststatus = is_doc and 0 or 2
+  vim.opt.fillchars:append({ eob = is_doc and " " or "░" })
 end
 
 apply_pager_view()

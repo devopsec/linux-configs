@@ -131,6 +131,7 @@ return {
         noice = true,
         notify = true,
         treesitter = true,
+        which_key = true,
       },
       custom_highlights = function(colors)
         local gutter_bg = colors.mantle

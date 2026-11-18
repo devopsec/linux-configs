@@ -14,7 +14,13 @@ return {
         motions = false,
         text_objects = false,
       })
-      return opts
+      -- wide centered layout and icons (lua/setup/whichkey.lua)
+      return require("setup.whichkey").opts(opts)
+    end,
+    config = function(_, opts)
+      require("which-key").setup(opts)
+      -- <leader> hydra mode and arrow/page navigation (lua/setup/whichkey.lua)
+      require("setup.whichkey").patch()
     end,
   },
   { "akinsho/bufferline.nvim", enabled = false },

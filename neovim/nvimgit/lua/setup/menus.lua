@@ -15,13 +15,12 @@ local function t(keys)
   return vim.api.nvim_replace_termcodes(keys, true, true, true)
 end
 
-local expropts = { expr = true, silent = true, replace_keycodes = false }
-
--- maps lhs to the keys returned by fn(); nil means "behave natively"
+-- command-line mappings are not <silent>: that skips redrawing the command
+-- line, so noice's popup would stay blank after recalling a history entry
 local function map(modes, lhs, fn)
   vim.keymap.set(modes, lhs, function()
     return t(fn() or lhs)
-  end, expropts)
+  end, { expr = true, silent = modes ~= "c", replace_keycodes = false })
 end
 
 local function noice_state()

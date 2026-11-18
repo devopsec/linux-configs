@@ -67,3 +67,38 @@ vim.keymap.set("v", "D", '"_D', keyopts)
 
 -- Split resizing (handled by functions)
 -- These will be set by autocommands calling the utility function.
+
+-- <Space> (leader) mappings, listed by the which-key menu (hydra mode, see
+-- lua/setup/whichkey.lua); vimpager's vimpagerrc defines the same set.
+-- Prompts (:help, :Man, :Info) are not <silent>, so the command line shows.
+local function leader(lhs, rhs, desc, silent)
+  vim.keymap.set("n", "<leader>" .. lhs, rhs, { silent = silent ~= false, desc = desc })
+end
+
+leader("qq", "<Cmd>qa<CR>", "Quit All")
+leader("-", "<C-W>s", "Split Window Below")
+leader("|", "<C-W>v", "Split Window Right")
+leader("?", function()
+  require("which-key").show({ global = false })
+end, "Buffer Keymaps (which-key)")
+
+leader("bb", "<C-^>", "Switch to Other Buffer")
+leader("bn", "<Cmd>bnext<CR>", "Next Buffer")
+leader("bp", "<Cmd>bprevious<CR>", "Previous Buffer")
+leader("bd", "<Cmd>bdelete<CR>", "Delete Buffer")
+
+leader("sw", "*", "Search Word Under Cursor")
+leader("sh", ":help ", "Help Page", false)
+leader("sm", ":Man ", "Man Page", false)
+leader("si", ":Info ", "Info Manual", false)
+
+leader("uw", "<Cmd>setlocal wrap! wrap?<CR>", "Toggle Wrap")
+leader("ul", "<Cmd>setlocal number! number?<CR>", "Toggle Line Numbers")
+leader("uL", "<Cmd>setlocal relativenumber! relativenumber?<CR>", "Toggle Relative Number")
+leader("uc", "<Cmd>setlocal cursorline! cursorline?<CR>", "Toggle Cursor Line")
+leader("uh", "<Cmd>set hlsearch! hlsearch?<CR>", "Toggle Search Highlight")
+leader("ur", "<Cmd>nohlsearch<Bar>redraw!<CR>", "Redraw / Clear hlsearch")
+
+leader("wd", "<C-W>c", "Delete Window")
+leader("wo", "<C-W>o", "Close Other Windows")
+leader("ww", "<C-W>p", "Other Window")
