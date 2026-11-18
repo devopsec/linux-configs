@@ -10,6 +10,7 @@ Personal Linux configuration files and tooling.
 | [`neovim/`](neovim/)                 | Neovim configs (`nvim`, `nvimgit`, `nvimpager`) and their installer and tests       |
 | [`vim/`](vim/)                       | Vim configs (`vim`, `vimpager`) and their installer and tests                       |
 | [`scm-auth/`](scm-auth/)             | Keyring-backed SCM auth: single SSH agent, git credential chain, helpers and tests  |
+| [`shell/`](shell/)                   | Login profile, XDG `environment.d` file, bash/ksh/zsh rc files, installer and tests |
 | [`installer-libs/`](installer-libs/) | Shared installer library used by all families                                       |
 | [`junie-cli/`](junie-cli/)           | Junie CLI home (`~/.junie`): agent guidelines, skills, commands, tooling            |
 | [`claude-code/`](claude-code/)       | Claude Code home (`~/.claude`): non-sensitive settings, theme, MCP servers          |
@@ -58,6 +59,14 @@ installed under `$XDG_DATA_HOME` (default `~/.local/share`); system-scope docs g
 - **Tabs:** Ctrl+PageUp/PageDown previous/next (wrapping), Ctrl+Home/End first/last.
 - **Splits:** Ctrl+Alt+PageUp/PageDown previous/next (wrapping), Ctrl+Alt+Home/End first/last, Ctrl+Alt+arrows move to the nearest split in that
   direction (no wrapping).
+- **Which-key (Space):** Space opens a menu of the leader mappings in `nvim`, `nvimpager`, `vim` and `vimpager`. Typing a key opens that group or runs
+  that mapping. The menu is in hydra mode: after a mapping runs it reopens at Space, until Esc closes it. Backspace or Left goes up a level,
+  Up/Down and PageUp/PageDown (or Ctrl+U/Ctrl+D) scroll, and keys without a mapping are ignored. `nvim` and `nvimpager` use which-key.nvim
+  (`lua/setup/whichkey.lua`). `vim` uses a built-in popup (`vim/vim/autoload/xwhichkey.vim`) with Vim versions of `nvim`'s core groups (tabs,
+  buffer, code, file, quit, ui, windows, diagnostics/quickfix). The pagers share a smaller set (buffer, quit, search, ui, windows, splits). In
+  `vimpager` Space no longer pages down; PageDown, `f` and Ctrl+F still do. `vimpager` runs Neovim when `$EDITOR` is `nvim`, and then uses
+  which-key.nvim from `nvim`'s plugins. `<Space>?` lists the current buffer's own mappings.
+- **Vim messages:** command output, errors and log messages use Vim's own message line, right above the status bar.
 
 ## Fonts
 
@@ -248,11 +257,55 @@ third-party OAuth apps; it cannot be fixed locally.
 - **Alternative:** a fine-grained personal access token scoped to the organization: run `git credential approve`, type `protocol=https`,
   `host=github.com`, `username=<user>`, `password=<token>` on separate lines and finish with an empty line (keeps the token out of shell history).
 
+## Shell Profile
+
+`./install.sh shell` (or `shell/install.sh`) installs the login chain and the shell rc files for the current user. The repo copies in `shell/home/`
+have no leading dot (Claude Code's sandbox protects dot-named shell files); the installer adds it:
+
+| Repo file                                          | Installed as                               | Read by                                                         |
+|----------------------------------------------------|--------------------------------------------|-----------------------------------------------------------------|
+| `shell/home/config/environment.d/60-xdg-dirs.conf` | `~/.config/environment.d/60-xdg-dirs.conf` | the systemd user manager at desktop login, and `~/.profile`     |
+| `shell/home/profile`                               | `~/.profile`                               | login shells: sh/dash, bash, ksh, and zsh through `~/.zprofile` |
+| `shell/home/bashrc`                                | `~/.bashrc`                                | interactive bash; `~/.profile` sources it in bash login shells  |
+| `shell/home/kshrc`                                 | `~/.kshrc`                                 | interactive ksh, through the `ENV` that `~/.profile` sets       |
+| `shell/home/zprofile`                              | `~/.zprofile`                              | zsh login shells; it sources `~/.profile`                       |
+| `shell/home/zshrc`                                 | `~/.zshrc`                                 | interactive zsh                                                 |
+
+- **Install:** user scope only: `-cm local`, the default when not run as root. `-cm users` and `-cm global` skip the family, so no other
+  home and nothing under `/etc` is touched. `shell/tests/check-profile.sh` must pass first; if it fails, or a target is a symlink or not a
+  regular file, nothing is written. Identical files are skipped. A changed file is first copied to `~/.var/backups/shell/<timestamp>/`
+  under the same home-relative path (one directory per run, `0700`), then rewritten in place, so it keeps its mode, owner and inode; a new
+  file is created `0600`. `-cc` removes nothing. The family is part of the default
+  selection of `./install.sh`.
+- **Before installing:** compare with `diff -u ~/.profile shell/home/profile` (and likewise for each row above).
+- **After installing:** new shells read the files. The desktop reads `~/.profile` and `60-xdg-dirs.conf` only at login: log out completely
+  or reboot. Undo a file with `cp -p ~/.var/backups/shell/<timestamp>/.profile ~/.profile`. Bash login shells read `~/.bash_profile` or
+  `~/.bash_login` instead of `~/.profile` when either exists; the installer warns about them.
+- **Desktop login:** COSMIC's `/usr/bin/start-cosmic` runs `$SHELL -l -c ...`, a non-interactive login shell, so `~/.profile` has no
+  interactive-only guard: it must set up the environment whatever `$-` is. `cosmic-session` and the apps it starts inherit that environment;
+  the systemd user manager only takes updated values for variables it already holds. Interactive-only settings go in the rc files, which
+  keep their own guards (`~/.profile` still sources `~/.bashrc` in bash, which returns at once when non-interactive).
+- **XDG directories:** defined only in `60-xdg-dirs.conf`, so desktop apps (started by the systemd user manager, which never reads
+  `~/.profile`) and TTY or ssh logins get the same values. Keep it to `NAME="value"` lines that both systemd and POSIX sh parse.
+- **`XDG_RUNTIME_DIR`:** `pam_systemd` sets it. Without a logind session (`su -l`, `sudo -iu`, containers) the profile uses
+  `/run/user/<uid>` only when that directory exists, and otherwise leaves it and `DOCKER_HOST` (the rootless podman socket) unset.
+- **Login safety:** `~/.profile` is POSIX sh and never sets `-e` or `-u`, so a failing command cannot abort a login. Sources and commands
+  are guarded, and problems are reported on stderr as `profile: ...` warnings.
+- **PATH helpers:** the `__shell_path_*` functions (prepend, append, remove, clean) are defined at the top of the profile and unset at the
+  end. `shell/tests/path-helpers.sh` is a copy of that block, which `check-profile.sh` keeps in sync, and `path-helpers.test.sh` tests it in
+  dash, bash and ksh: edit both together.
+- **Checks:** `shell/tests/check-profile.sh` checks the repo copies (`--installed`: `~/.profile` and the installed `.conf`; or
+  `PROFILE CONF`). It runs `dash`/`bash`/`ksh -n`, `shellcheck -x` from a scratch home laid out like `~`, an interactive (TTY/ssh) and a
+  non-interactive (desktop) `set -eu` login in dash, bash and ksh that must each exit 0 with nothing on stderr and `EDITOR` set, compares
+  the XDG values with the systemd environment generator, and runs the PATH helper tests. It needs dash and bash, and uses ksh, shellcheck and the generator when installed. The profile's `source-path`
+  directives resolve both in the repo (`config/`) and once installed (`.config/`).
+
 ## Post-Install Shell Configuration
 
-Add the following to `~/.profile` to wire up the installed apps:
+The [`shell`](#shell-profile) family's `~/.profile` already sets these (with `PAGER='nvimpager -a'`). Without it, add the following to
+`~/.profile` to wire up the installed apps:
 
-```bash
+```sh
 export PAGER='nvimpager'
 export MANPAGER='nvimpager -p'
 export EDITOR='nvim'
@@ -263,42 +316,67 @@ export VISUAL='nvim'
 
 GNU `info` has no `INFOPAGER` variable, so the pager cannot drive its interactive reader directly. Instead, `nvimpager` loads the manual with [info.nvim](https://github.com/ValdezFOmar/info.nvim), which keeps colors and node navigation.
 
-- **Shell function:** add to `~/.profile`. It opens the manual in `nvimpager` when run in a terminal, and falls back to the plain `info` otherwise:
+- **Shell function:** add to `~/.profile`. In a terminal it opens a Texinfo manual in `nvimpager`. A topic that only has a man page (`info`
+  falls back to it, e.g. `info tar` without the `tar` manual) goes to `man`, so `MANPAGER` shows it. Options, more than two arguments, unknown
+  topics, and output that is not a terminal go to the plain `info`:
 
-```bash
+```sh
 info() {
-    if [[ -t 1 && $# -gt 0 && "$1" != -* ]]; then
-        local arg
-        local -a topic=()
-        for arg in "$@"; do topic+=("${arg// /\\ }"); done
-        nvimpager -- -c "Info ${topic[*]}" -c only
-    else
-        command info "$@"
+    if [ -t 1 ] && [ $# -gt 0 ] && [ $# -le 2 ] && [ "${1#-}" = "$1" ]; then
+        case $(command info --where "$@" 2>/dev/null) in
+            '') ;;
+            '*manpages*')
+                man "$1"
+                return ;;
+            *)
+                _info_topic=
+                for _info_arg in "$@"; do
+                    _info_topic="$_info_topic $(printf '%s' "$_info_arg" | sed 's/[\\ ]/\\&/g')"
+                done
+                nvimpager -p -- -c "Info$_info_topic" -c only
+                _info_rc=$?
+                unset _info_topic _info_arg
+                return "$_info_rc" ;;
+        esac
     fi
+    command info "$@"
 }
 ```
 
-- **Navigation in the pager:** `gn`/`gp`/`gu` go to the next, previous, and up node, `K` follows the reference under the cursor, `<BS>` goes back, and `q` quits.
+- **Navigation in the pager:** `gn`/`gp`/`gu` go to the next, previous, and up node, `K` or Ctrl+click follows a reference, `<BS>` goes back,
+  and `q` quits.
 - **Inside `nvim`:** `:Info tar` opens a manual, and `:Info!` jumps to the entry under the cursor. `vim` gets the same behavior from [info.vim](https://github.com/HiPhish/info.vim).
 
-Requires the `info` binary (`texinfo` package). The `info.nvim` revision is pinned in `neovim/nvimpager/lua/plugins/tools.lua` because newer revisions need Neovim 0.12.
+Requires the `info` binary (`texinfo` package) and an up-to-date `~/.config/nvimpager`: run `neovim/install.sh nvimpager` again after
+pulling, otherwise `info.nvim` is missing and `nvimpager` reports `E492: Not an editor command: Info`. The `info.nvim` revision is pinned in
+`neovim/nvimpager/lua/plugins/tools.lua` because newer revisions need Neovim 0.12.
+
+### References in `nvim` and `nvimpager`
+
+Ctrl+click follows the reference under the mouse and holding Ctrl while moving the mouse underlines it: URLs, manpage references like
+`ls(1)`, `info` cross-references and menu entries, and `|tags|` in `:help`. In `nvimpager`, `<C-t>` (manpages, help) or `<BS>` (info)
+goes back; in `nvim` a manpage opens in a split, like `K`. A double-click only selects the word. The terminal may open the URLs it
+recognizes itself (VTE-based terminals do for `http(s)`, `ftp`, `mailto`, ...); the others are opened with `vim.ui.open()`. The mouse
+pointer turns into a hand only over those terminal-recognized URLs: VTE gives applications no way to change the pointer shape.
 
 ## Post-Install Git Configuration
 
-Add the following to `~/.gitconfig` to use `nvimgit` as your Git editor and diff/merge tool:
+Add the following to `~/.gitconfig` to use `nvimgit` as your Git editor and diff/merge tool. `neovim/install.sh nvimgit` installs the
+`nvimgit` command (a shim for `NVIM_APPNAME=nvimgit nvim`) in `~/.local/bin` (user install mode) or `/usr/local/bin` (system install
+mode):
 
 ```ini
 [core]
 pager = nvimpager -a
-editor = NVIM_APPNAME=nvimgit nvim
+editor = nvimgit
 [diff]
 tool = nvim
 [difftool "nvim"]
-cmd = NVIM_APPNAME=nvimgit nvim -d "$LOCAL" "$REMOTE"
+cmd = nvimgit -d "$LOCAL" "$REMOTE"
 [merge]
 tool = nvim
 [mergetool "nvim"]
-cmd = NVIM_APPNAME=nvimgit nvim -d "$LOCAL" "$MERGED" "$REMOTE"
+cmd = nvimgit -d "$LOCAL" "$MERGED" "$REMOTE"
 ```
 
 ## Tests
@@ -316,6 +394,8 @@ scm-auth/tests/git.sh # temp HOME; git include, helper dedupe/restore, git-crede
 scm-auth/tests/forge-hf.sh # temp HOME + stub forge/curl/hf; scm-auth-login, hf shim, forge-gist, shim guard, gcli cleanup, status clients
 neovim/tests/startup.sh # nvim, nvimgit, nvimpager and the nvimpager runtime-load case
 vim/tests/startup.sh # vim
+shell/tests/install.sh # temp HOME + sudo stub; install, idempotency, in-place update/backups/modes, -cc, symlink and failed-check refusal
+shell/tests/check-profile.sh # profile + environment.d: syntax, shellcheck, strict dash/bash/ksh logins, systemd parity, PATH helper tests
 ```
 
 ## Agent Configs
