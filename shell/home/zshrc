@@ -1,0 +1,189 @@
+#===============================================================================
+# User Z Shell Config
+# -------------------
+# shellcheck shell=bash
+#===============================================================================
+
+# ==============================================================================
+# 1. PATHS & FUNCTIONS (Must be loaded first)
+# ==============================================================================
+
+# Append custom local user completion directories to the function path
+fpath=(
+    "$HOME/.local/share/zsh/site-functions"
+    "$HOME/.local/share/zsh/completions"
+    $fpath
+)
+
+# Set up the prompt
+autoload -Uz promptinit && promptinit && prompt fire
+
+# ==============================================================================
+# 2. SHELL OPTIONS & HISTORY
+# ==============================================================================
+
+# History configuration (XDG variation: ~/.local/share/zsh/history is also an option)
+HISTSIZE=10000
+SAVEHIST=10000
+HISTFILE=~/.zsh_history
+
+setopt histignorealldups sharehistory
+
+# Use emacs keybindings even if our EDITOR is set to vim
+bindkey -e
+
+# ==============================================================================
+# 3. THE COMPLETION SYSTEM (Using the modern engine)
+# ==============================================================================
+
+# Initialize the zsh completion architecture with the updated fpath
+autoload -Uz compinit && compinit
+# Optionally enable completions from bash as well
+#autoload -Uz bashcompinit && bashcompinit
+
+# Colorize tab completions using system dircolors
+if [ -x "$(command -v dircolors)" ]; then
+    eval "$(dircolors -b)"
+    zstyle ':completion:*:default' list-colors ${(s.:.)LS_COLORS}
+else
+    zstyle ':completion:*' list-colors ''
+fi
+
+# Behavior and Interface
+zstyle ':completion:*' completer _expand _complete _correct _approximate
+zstyle ':completion:*' menu select=2
+zstyle ':completion:*' menu select=long
+zstyle ':completion:*' use-compctl false
+zstyle ':completion:*' verbose true
+
+# Visual formatting and layout
+zstyle ':completion:*' auto-description 'specify: %d'
+zstyle ':completion:*' format 'Completing %d'
+zstyle ':completion:*' group-name ''
+zstyle ':completion:*' list-prompt %SAt %p: Hit TAB for more, or the character to insert%s
+zstyle ':completion:*' select-prompt %SScrolling active: current selection at %p%s
+
+# Intelligent case-insensitive and partial-word matching
+zstyle ':completion:*' matcher-list '' 'm:{a-z}={A-Z}' 'm:{a-zA-Z}={A-Za-z}' 'r:|[._-]=* r:|=* l:|=*'
+
+# System process tab completion formatting (kill command)
+zstyle ':completion:*:kill:*' command 'ps -u $USER -o pid,%cpu,tty,cputime,cmd'
+zstyle ':completion:*:*:kill:*:processes' list-colors '=(#b) #([0-9]#)*=0=01;31'
+
+# ==============================================================================
+# 4. HELPER FUNCTIONS
+# ==============================================================================
+
+# Same rules as the ~/.profile __shell_path_* helpers: entries must be absolute and free of
+# ":", trailing slashes are dropped and "dir/" counts as "dir". They edit PATH through its
+# tied $path array; zsh variables are dynamically scoped, so these update the caller's
+# "local -x PATH" when it has one. An empty PATH ties to path=(''), so it is reset to () first.
+
+# Succeed when "$1" can be a PATH entry; warn on stderr otherwise. A value with
+# non-printable characters is not printed, so it cannot send escape sequences to the terminal.
+function __zsh_path_valid {
+    emulate -L zsh
+    local reason shown="'$1'"
+    case $1 in
+        ('')  reason=empty ;;
+        (*:*) reason='contains ":"' ;;
+        (/*)  return 0 ;;
+        (*)   reason='not an absolute path' ;;
+    esac
+    [[ $1 == *[^[:print:]]* ]] && shown='<has non-printable characters>'
+    print -ru2 -- "${funcstack[2]}: skipping PATH entry $shown: $reason"
+    return 1
+}
+
+# Put "$1" first in PATH, moving it there if it is already present
+function __zsh_path_prepend {
+    emulate -L zsh -o extended_glob
+    __zsh_path_valid "$1" || return
+    local dir=${1%%/##}
+    : ${dir:=/}
+    [[ -n $PATH ]] || path=()
+    # $dir is matched literally; only "(|/)" is a pattern
+    path=("$dir" "${(@)path:#$dir(|/)}")
+}
+
+# Add "$1" last in PATH, unless it is already present anywhere
+function __zsh_path_append {
+    emulate -L zsh -o extended_glob
+    __zsh_path_valid "$1" || return
+    local dir=${1%%/##}
+    : ${dir:=/}
+    [[ -n $PATH ]] || path=()
+    (( $path[(Ie)$dir] || $path[(Ie)$dir/] )) || path+=("$dir")
+}
+
+# ==============================================================================
+# 5. PAGER / DOCS TOOLS
+# ==============================================================================
+
+# Texinfo manuals open in nvimpager (info.nvim) and manpage-only topics in man; options, more
+# than two arguments or output that is not a terminal go to the real info
+function info {
+    emulate -L zsh
+    local where
+    if [[ -t 1 ]] && (( # > 0 && # <= 2 )) && [[ $1 != -* ]]; then
+        where=$(command info --where "$@" 2>/dev/null)
+        if [[ $where == '*manpages*' ]]; then
+            man $1
+            return
+        elif [[ -n $where ]]; then
+            # backslashes and spaces escaped for the :Info command line
+            nvimpager -p -- -c "Info ${(j: :)${(@)${(@)@//\\/\\\\}// /\\ }}" -c only
+            return
+        fi
+    fi
+    command info "$@"
+}
+
+# ==============================================================================
+# 6. LLM CLI TOOLS
+# ==============================================================================
+
+# Junie CLI
+# - JUNIE_NO_SANDBOX environment var disables the sandbox lock when launching
+# - PATH extended with custom agent tools (used in custom commands as well)
+# - mise Safe Mode set to prevent agent loading arbitrary configs
+# - PATH and the settings are function-local exports (local -x): only junie sees them
+function junie {
+    emulate -L zsh
+    local tools=$HOME/.junie/custom/bin
+    local -a flags=(
+        --skip-update-check
+        --use-version
+        --use-local-cache
+        --share-anonymous-statistics false
+    )
+    [[ -z $JUNIE_NO_SANDBOX ]] && flags+=(--sandbox)
+
+    local -x MISE_SAFE=1 PATH=$PATH
+    [[ -d $tools ]] && __zsh_path_prepend $tools
+
+    command junie $flags "$@"
+}
+
+# Claude Code
+# - anthropic is known for feeding off your soul whenever you are not looking..
+# - other settings are same as junie cli above
+# TODO: consider adding "--restricted"
+# REF:  https://code.claude.com/docs/en/cli-reference#cli-flags
+# REF:  https://code.claude.com/docs/en/sandboxing
+function claude {
+    emulate -L zsh
+    local tools=$HOME/.claude/custom/bin
+
+    local -x MISE_SAFE=1 PATH=$PATH
+    local -x CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL=1
+    local -x CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1
+    local -x DISABLE_NON_ESSENTIAL_MODEL_CALLS=1
+    local -x DISABLE_TELEMETRY=1
+    local -x DISABLE_ERROR_REPORTING=1
+    local -x DISABLE_FEEDBACK_COMMAND=1
+    [[ -d $tools ]] && __zsh_path_prepend $tools
+
+    command claude --strict-mcp-config "$@"
+}
+

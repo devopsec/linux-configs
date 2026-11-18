@@ -1,0 +1,494 @@
+# shellcheck shell=sh
+# Ref: https://github.com/koalaman/shellcheck/blob/master/shellcheck.1.md#directives
+# Sourced paths resolve from this file's directory: $HOME once installed, shell/home in the
+# linux-configs repo, where the files have no leading dot. `shellcheck -x` follows them.
+# external-sources=true is only accepted in a .shellcheckrc.
+# shellcheck source-path=SCRIPTDIR/.config source-path=SCRIPTDIR/config
+
+#=============================================================================================
+# User-Global Profile Config
+#=============================================================================================
+# POSIX compliant (should be sourced)
+# Settings are active for the lifetime of the session
+# Tuned for Pop!_OS COSMIC
+#=============================================================================================
+
+#=============================================================================================
+# Shell Config Load Order                                                               (bash)
+#=============================================================================================
+# --------------------------------------------------------------------------------------------
+# interactive login shells                        (ssh, tty login, bash --login)
+# --------------------------------------------------------------------------------------------
+# (1)   /etc/profile                              Imported directly
+# (1a)    /etc/bash.bashrc                        Conditional nested import (Debian/Ubuntu/Pop)
+# (1b)    /etc/profile.d/*.sh                     Nested imports
+# (2)   ~/.bash_profile                           FIRST FOUND IS READ; OTHERS IGNORED
+# (3)   ~/.bash_login                             Only read if ~/.bash_profile missing
+# (4)   ~/.profile                                Only read if both above are missing
+# (4a)    ~/.bashrc                               Manual nested import (recommended)
+# --------------------------------------------------------------------------------------------
+# interactive non-login shells                    (COSMIC Terminal, subshell)
+# --------------------------------------------------------------------------------------------
+# (1)   /etc/bash.bashrc                          Imported directly
+# (2)   ~/.bashrc                                 Imported directly
+# --------------------------------------------------------------------------------------------
+# non-interactive shells                          (Scripts, cron, ssh commands)
+# --------------------------------------------------------------------------------------------
+# (1)   $BASH_ENV                                 Points to file path if env var is set
+#=============================================================================================
+
+#=============================================================================================
+# Shell Config Load Order                                                                (zsh)
+#=============================================================================================
+# --------------------------------------------------------------------------------------------
+# interactive login shells                        (ssh, tty login, zsh --login)
+# --------------------------------------------------------------------------------------------
+# (1)   /etc/zshenv                               Imported directly
+# (2)   ~/.zshenv                                 Imported directly
+# (3)   /etc/zprofile                             Imported directly
+# (4)   ~/.zprofile                               Imported directly (good for shared variables)
+# (5)   /etc/zshrc                                Imported directly
+# (6)   ~/.zshrc                                  Imported directly (interactive settings)
+# (7)   /etc/zlogin                               Imported directly
+# (8)   ~/.zlogin                                 Imported directly
+# --------------------------------------------------------------------------------------------
+# interactive non-login shells                    (COSMIC Terminal, subshell)
+# --------------------------------------------------------------------------------------------
+# (1)   /etc/zshenv                               Imported directly
+# (2)   ~/.zshenv                                 Imported directly
+# (3)   /etc/zshrc                                Imported directly
+# (4)   ~/.zshrc                                  Imported directly
+# --------------------------------------------------------------------------------------------
+# non-interactive shells                          (Scripts, cron, ssh commands)
+# --------------------------------------------------------------------------------------------
+# (1)   /etc/zshenv                               Imported directly
+# (2)   ~/.zshenv                                 Imported directly
+#=============================================================================================
+
+#=============================================================================================
+# Shell Config Load Order                                                                (ksh)
+#=============================================================================================
+# --------------------------------------------------------------------------------------------
+# interactive login shells                         (ssh, tty login, ksh -l)
+# --------------------------------------------------------------------------------------------
+# (1)   /etc/profile                               Imported directly
+# (2)   ~/.profile                                 Imported directly
+# (2a)    $ENV                                     Evaluated & sourced if set (e.g., ~/.kshrc)
+# --------------------------------------------------------------------------------------------
+# interactive non-login shells                     (COSMIC Terminal, subshell)
+# --------------------------------------------------------------------------------------------
+# (1)   $ENV                                       Evaluated & sourced if set (e.g., ~/.kshrc)
+# --------------------------------------------------------------------------------------------
+# non-interactive shells                           (Scripts, cron, ssh commands)
+# --------------------------------------------------------------------------------------------
+# (1)   $ENV                                       Not read (unless ksh -i invoked)
+#=============================================================================================
+
+# No interactive-only guard: graphical logins source this file from a non-interactive
+# login shell (COSMIC's start-cosmic runs `$SHELL -l -c ...`), so the session environment
+# must be set up here regardless of $-. Interactive-only settings belong in the rc files,
+# which keep their own guards.
+
+#=============================================================================================
+# Script Helper Functions
+#=============================================================================================
+# POSIX sh, builtins only (no forks), safe under `set -u`. Every PATH entry should be
+# absolute: an empty, "." or relative entry makes command lookup depend on the current
+# directory. Call __shell_path_clean once before the other helpers.
+
+# Warn on stderr that PATH entry "$1" is skipped because of "$2". A value with
+# non-printable characters is not printed, so it cannot send escape sequences to the
+# terminal.
+__shell_path_warn() {
+    case $1 in
+        *[![:print:]]*) set -- '<has non-printable characters>' "$2" ;;
+        *) set -- "'$1'" "$2" ;;
+    esac
+    printf 'profile: skipping PATH entry %s: %s\n' "$1" "$2" >&2
+}
+
+# Succeed when "$1" can be a PATH entry: absolute and free of ":".
+__shell_path_valid() {
+    case ${1-} in
+        '') __shell_path_warn '' 'empty' ;;
+        *:*) __shell_path_warn "$1" 'contains ":"' ;;
+        /*) return 0 ;;
+        *) __shell_path_warn "$1" 'not an absolute path' ;;
+    esac
+    return 1
+}
+
+# Drop every PATH entry that is not an absolute path, with a warning for each.
+__shell_path_clean() {
+    case ":${PATH-}:" in
+        *:[!/]*) ;;
+        *) return 0 ;;
+    esac
+    __shell_path_rest="${PATH-}:"
+    __shell_path_new=
+    while [ -n "$__shell_path_rest" ]; do
+        __shell_path_dir=${__shell_path_rest%%:*}
+        __shell_path_rest=${__shell_path_rest#*:}
+        case $__shell_path_dir in
+            /*) __shell_path_new=${__shell_path_new:+$__shell_path_new:}$__shell_path_dir ;;
+            '') __shell_path_warn '' 'empty' ;;
+            *) __shell_path_warn "$__shell_path_dir" 'not an absolute path' ;;
+        esac
+    done
+    PATH=$__shell_path_new
+    unset __shell_path_rest __shell_path_new __shell_path_dir
+}
+
+# Remove every "$1" entry, with or without a trailing "/", from PATH. Other entries are
+# kept as they are.
+__shell_path_remove() {
+    __shell_path_new=":${PATH-}:"
+    while :; do
+        case $__shell_path_new in
+            *":$1:"*) __shell_path_new=${__shell_path_new%%":$1:"*}:${__shell_path_new#*":$1:"} ;;
+            *":$1/:"*) __shell_path_new=${__shell_path_new%%":$1/:"*}:${__shell_path_new#*":$1/:"} ;;
+            *) break ;;
+        esac
+    done
+    __shell_path_new=${__shell_path_new#:}
+    PATH=${__shell_path_new%:}
+    unset __shell_path_new
+}
+
+# Put "$1" first in PATH, moving it there if it is already present.
+__shell_path_prepend() {
+    __shell_path_valid "${1-}" || return
+    set -- "${1%"${1##*[!/]}"}"
+    set -- "${1:-/}"
+    case ":${PATH-}:" in
+        *":$1:"* | *":$1/:"*) __shell_path_remove "$1" ;;
+    esac
+    PATH=$1${PATH:+:$PATH}
+}
+
+# Add "$1" last in PATH, unless it is already present anywhere.
+# A caller may not use it (~/.profile only prepends today), so SC2329 is off for it.
+# shellcheck disable=SC2329
+__shell_path_append() {
+    __shell_path_valid "${1-}" || return
+    set -- "${1%"${1##*[!/]}"}"
+    set -- "${1:-/}"
+    case ":${PATH-}:" in
+        *":$1:"* | *":$1/:"*) ;;
+        *) PATH=${PATH:+$PATH:}$1 ;;
+    esac
+}
+
+# drop empty, "." and relative entries inherited from the login environment
+__shell_path_clean
+
+#=============================================================================================
+# Shell Session Settings
+#=============================================================================================
+
+# Default Permissions for this Session
+#   - umask -> user sfperms conversion table is provided below
+#   - default system perms: file=666 dir=777 umask=022
+#   - how umask is applied: userperm = sysperm & ~umask
+#
+# umask | New File (666)  | New Dir (777)   | Description
+# ------+-----------------+-----------------+------------------
+#  000  | 666 (rw-rw-rw)  | 777 (rwxrwxrwx) | No restrictions
+#  002  | 664 (rw-rw-r--) | 775 (rwxrwxr-x) | Group writeable
+#  022  | 644 (rw-r--r--) | 755 (rwxr-xr-x) | Standard (Public)
+#  027  | 640 (rw-r-----) | 750 (rwxr-x---) | Group-only access
+#  077  | 600 (rw-------) | 700 (rwx------) | Fully Private
+
+# note: better configured globally via GECOS
+# ref:  https://linux-audit.com/filesystems/file-permissions/set-default-file-permissions-with-umask/
+umask 0077
+
+# --- XDG Base & User Directories ---
+# environment.d/60-xdg-dirs.conf is the only definition: the desktop gets it from the
+# systemd user manager, and TTY and ssh logins read it here. Keep that file to lines both
+# parsers accept: NAME="value" with only $VAR, ${VAR}, ${VAR:-...} and ${VAR:+...}.
+__xdg_env="${XDG_CONFIG_HOME:-$HOME/.config}/environment.d/60-xdg-dirs.conf"
+if [ -r "$__xdg_env" ]; then
+    set -a
+    # shellcheck source=environment.d/60-xdg-dirs.conf
+    . "$__xdg_env"
+    set +a
+else
+    printf 'profile: cannot read %s; XDG directories are not set\n' "$__xdg_env" >&2
+fi
+unset __xdg_env
+
+# pam_systemd sets XDG_RUNTIME_DIR. Without a logind session (su -l, sudo -iu, containers)
+# use /run/user/<uid> only if logind created it; otherwise leave it unset, so programs use
+# their own fallback instead of a missing directory.
+if [ -z "${XDG_RUNTIME_DIR-}" ]; then
+    __xdg_rt="/run/user/$(id -u)"
+    [ -d "$__xdg_rt" ] && export XDG_RUNTIME_DIR="$__xdg_rt"
+    unset __xdg_rt
+fi
+
+# Wayland / X11 Display Settings
+# TODO: clean up this section. At desktop login start-cosmic sources this file before the
+#       compositor runs, so WAYLAND_DISPLAY and DISPLAY are unset and only the tty branch
+#       runs; start-cosmic then sets its own GDK_BACKEND, QT_QPA_PLATFORM and
+#       QT_AUTO_SCREEN_SCALE_FACTOR. Terminals are non-login shells and never read it, so
+#       the block only applies to logins that already have a display. Decide which
+#       variables are still wanted (MESA_VK_DEVICE_SELECT is machine-specific; xhost forks
+#       and XAUTHORITY overrides the display manager's cookie path), then move them to an
+#       environment.d file or the rc files, and drop the rest.
+if [ -n "${WAYLAND_DISPLAY-}" ]; then
+    if [ -n "${DISPLAY-}" ]; then
+        # hybrid session (prefer wayland, allow fallback)
+        export QT_QPA_PLATFORM='wayland;xcb'
+        export GDK_BACKEND='wayland,x11'
+        export ELECTRON_OZONE_PLATFORM_HINT=auto
+
+        # Allow current user to connect to current X display
+        # Preserve X11 cookie when running cmds on other displays
+        xhost "+si:localuser:$USER" >/dev/null 2>&1
+        export XAUTHORITY="${HOME}/.Xauthority"
+    else
+        # wayland only session (force wayland)
+        export QT_QPA_PLATFORM=wayland
+        export GDK_BACKEND=wayland
+        export ELECTRON_OZONE_PLATFORM_HINT=wayland
+    fi
+
+    # Default to loading the Meteor Lake GPU for Vulkan
+    # Can be verified via:  MESA_VK_DEVICE_SELECT=list vulkaninfo
+    export MESA_VK_DEVICE_SELECT=0
+
+    # Enable proper scaling
+    export QT_AUTO_SCREEN_SCALE_FACTOR=1
+
+    # Reduce CSD glitches in some apps
+    export QT_WAYLAND_DISABLE_WINDOWDECORATION=1
+
+    # Reduces flickering in mixed-DPI monitors
+    export QT_WAYLAND_FORCE_DPI=physical
+
+    # Consistent theming
+    export QT_STYLE_OVERRIDE=Fusion
+elif [ -n "${DISPLAY-}" ]; then
+    # x11 only session
+    export QT_QPA_PLATFORM=xcb
+    export GDK_BACKEND=x11
+    export ELECTRON_OZONE_PLATFORM_HINT=x11
+
+    # Consistent theming
+    export QT_STYLE_OVERRIDE=Fusion
+
+    # Allow current user to connect to current X display
+    # Preserve X11 cookie when running cmds on other displays
+    xhost "+si:localuser:$USER" >/dev/null 2>&1
+    export XAUTHORITY="${HOME}/.Xauthority"
+else
+    # tty session
+    :
+fi
+
+#=============================================================================================
+# General Application Settings
+#=============================================================================================
+
+# Universal opt-out: https://donottrack.sh/
+# More telemetry opt-out settings: https://github.com/alloydwhitlock/do-not-track-cli
+export DO_NOT_TRACK=1
+
+# MicroSlop Privacy Settings (when there is no other option...)
+export DOTNET_SUGGEST_REGISTRATION_OPT_OUT=1 \
+    DOTNET_CLI_TELEMETRY_OPTOUT=1 \
+    DOTNET_INTERACTIVE_CLI_TELEMETRY_OPTOUT=1 \
+    DOTNET_PERF_TELEMETRY_ENABLED=0 \
+    DOTNET_SVCUTIL_TELEMETRY_OPTOUT=1 \
+    DOTNET_SCAFFOLD_TELEMETRY_OPTOUT=1 \
+    DOTNET_HTTPREPL_TELEMETRY_OPTOUT=1 \
+    DOTNET_ENABLE_DIAGNOSTICS=0 \
+    DOTNET_EnableCrashReport=0 \
+    TESTINGPLATFORM_TELEMETRY_OPTOUT=1 \
+    NUGET_ENABLE_TELEMETRY=0 \
+    MSBUILDDISABLENODEREUSE=1 \
+    ASPIRE_CLI_TELEMETRY_OPTOUT='true' \
+    MLDOTNET_CLI_TELEMETRY_OPTOUT=1 \
+    MSSQL_CLI_TELEMETRY_OPTOUT=1 \
+    POWERSHELL_TELEMETRY_OPTOUT=1
+
+# Cloud Provider Tool Settings
+export CLOUDSDK_CORE_DISABLE_USAGE_REPORTING='true' \
+    NO_GCE_CHECK='true' \
+    AZURE_CORE_COLLECT_TELEMETRY=0 \
+    FUNCTIONS_CORE_TOOLS_TELEMETRY_OPTOUT=1 \
+    CDK_DISABLE_CLI_TELEMETRY='true' \
+    SAM_CLI_TELEMETRY=0 \
+    SWA_DISABLE_TELEMETRY='true' \
+    PP_TOOLS_TELEMETRY_OPTOUT=1
+
+# Package Manager Tool Settings
+export NEXT_TELEMETRY_DISABLED=1 \
+    GATSBY_TELEMETRY_DISABLED=1 \
+    NUXT_TELEMETRY_DISABLED=1 \
+    NPM_CONFIG_UPDATE_NOTIFIER='false' \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Wine Settings
+if [ -z "${WINEPREFIX-}" ]; then
+    export WINEPREFIX="$HOME/.wine" \
+        WINEDEBUG='-all'
+fi
+
+# Disable Un-Wanted GUI App Crash Handlers
+export ELECTRON_DISABLE_CRASH_REPORTER=1 \
+    MOZ_CRASHREPORTER_DISABLE=1
+
+# Scapy Settings
+export SCAPY_USE_PCAPDNET='yes'
+
+#=============================================================================================
+# Pager / Docs Tools
+#=============================================================================================
+
+# Set the default pagers
+export PAGER='nvimpager -a'
+export MANPAGER='nvimpager -p'
+
+# Set the default text editors
+export EDITOR='nvim'
+export VISUAL='nvim'
+
+#=============================================================================================
+# SCM Tools (VCS/CI/CD/IaC/OCI/VMM)
+#=============================================================================================
+
+# VCS Tool Settings
+export GH_TELEMETRY='false' \
+    GH_NO_UPDATE_NOTIFIER=1 \
+    GLAB_NO_UPDATE_NOTIFIER=1 \
+    ATLASSIAN_ANALYTICS_DISABLED='true' \
+    FORGE_ANALYTICS='false' \
+    HF_HUB_DISABLE_TELEMETRY=1 \
+    HF_HUB_DISABLE_UPDATE_CHECK=1 \
+    HF_XET_TELEMETRY_ENABLED=0 \
+    HF_XET_HIGH_PERFORMANCE=1
+
+# CI/CD/IaC Tool Settings
+export CHECKPOINT_DISABLE=1 \
+    TOFU_CHECKPOINT_DISABLE=1 \
+    PULUMI_SKIP_UPDATE_CHECK='true' \
+    TFCTL_TELEMETRY='disabled' \
+    ATMOS_TELEMETRY_ENABLED=false \
+    VAGRANT_CHECKPOINT_DISABLE=1 \
+    VAGRANT_BOX_UPDATE_CHECK_DISABLE=1 \
+    OTEL_TRACES_EXPORTER='none' \
+    OTEL_METRICS_EXPORTER='none' \
+    OTEL_LOGS_EXPORTER='none'
+
+# OCI/VMM Tool Settings
+if [ -n "${XDG_RUNTIME_DIR-}" ]; then
+    export DOCKER_HOST="unix://$XDG_RUNTIME_DIR/podman/podman.sock"
+fi
+
+#=============================================================================================
+# Homebrew settings (user level)
+#=============================================================================================
+
+if [ -x /home/linuxbrew/.linuxbrew/bin/brew ]; then
+    export HOMEBREW_NO_ANALYTICS=1 \
+        HOMEBREW_NO_ANALYTICS_THIS_RUN=1 \
+        HOMEBREW_NO_AUTO_UPDATE=1 \
+        HOMEBREW_PREFIX='/home/linuxbrew/.linuxbrew' \
+        HOMEBREW_CELLAR='/home/linuxbrew/.linuxbrew/Cellar' \
+        HOMEBREW_REPOSITORY='/home/linuxbrew/.linuxbrew/Homebrew'
+
+    # homebrew installed apps
+    __shell_path_prepend "$HOMEBREW_PREFIX/bin"
+fi
+
+#=============================================================================================
+# Rust Development Tools
+#=============================================================================================
+
+#if [ -d "$HOME/.cargo" ]; then
+#    __shell_path_prepend "$HOME/.cargo/bin"
+#fi
+
+#=============================================================================================
+# C / C++ Development Tools
+#=============================================================================================
+
+# include user local headers
+#export CPATH="${HOME}/.local/include${CPATH:+:$CPATH}"
+# include user local static libs
+#export LIBRARY_PATH="${HOME}/.local/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
+# include user local shared libs
+#export LD_LIBRARY_PATH="${HOME}/.local/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+#=============================================================================================
+# Mise Installed Tools (user level)
+#=============================================================================================
+# TODO: migrate deprecated package managers to mise
+# TODO: migrate gcloud to mise
+# TODO: migrate junie cli to mise
+# TODO: migrate hatch to mise
+# TODO: migrate bin/binpak to mise and remove bin/binpak from system
+# TODO: migrate uv tools to mise
+# TODO: migrate cargo tools to mise
+
+if [ -d "$XDG_CONFIG_HOME/mise" ]; then
+    __shell_path_prepend "$XDG_DATA_HOME/mise/shims"
+fi
+
+#=============================================================================================
+# Jetbrains Toolbox App/CLI Tools
+#=============================================================================================
+
+# tools managed by jetbrains toolbox installer
+if [ -d "$XDG_DATA_HOME/JetBrains/Toolbox" ]; then
+    __shell_path_prepend "$XDG_DATA_HOME/JetBrains/Toolbox/scripts"
+fi
+
+#=============================================================================================
+# User Installed Tools / Symlinks
+#=============================================================================================
+# - highest priority when looking up commands
+
+if [ -d "$XDG_BIN_DIR" ]; then
+    __shell_path_prepend "$XDG_BIN_DIR"
+fi
+
+#=============================================================================================
+# Script Environment Cleanup
+#=============================================================================================
+
+export PATH
+
+unset -f __shell_path_prepend
+unset -f __shell_path_append
+unset -f __shell_path_remove
+unset -f __shell_path_clean
+unset -f __shell_path_valid
+unset -f __shell_path_warn
+
+#=============================================================================================
+# Shell Specific Settings
+#=============================================================================================
+# bash requires explicit sourcing of its rc config in interactive mode
+# ksh sources $ENV itself in interactive shells, right after this file in login shells
+# zsh uses ~/.zprofile instead, thereforce omitted below
+
+# the branch whose *_VERSION is set expands to 1 and matches
+# shellcheck disable=SC2194
+case 1 in
+"${BASH_VERSION:+1}")
+    if [ -f "$HOME/.bashrc" ]; then
+        # bash code, named bashrc in the repo: shellcheck checks it on its own
+        # shellcheck source=/dev/null
+        . "$HOME/.bashrc"
+    fi
+    ;;
+"${KSH_VERSION:+1}")
+    if [ -f "$HOME/.kshrc" ]; then
+        export ENV="$HOME/.kshrc"
+    fi
+    ;;
+esac
+

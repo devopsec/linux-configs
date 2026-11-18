@@ -1,0 +1,4 @@
+# note: shellcheck does not support zsh, use zshellcheck instead
+
+[[ -f ~/.profile ]] && source ~/.profile
+

@@ -1,0 +1,913 @@
+# shellcheck shell=bash
+
+#===============================================================================
+# User Bash Config
+# ----------------
+#
+#===============================================================================
+
+# Return if not running interactive shell
+case "$-" in
+    *i*)        ;;
+    *) return 0 ;;
+esac
+
+# Return if sourced from JediTerm
+# Ref: https://youtrack.jetbrains.com/projects/JUNIE/issues/JUNIE-1582/Junie-keeps-failing-with-bash-commands-it-keeps-reporting-empty-results-for-ls-find-etc.
+if [[ -n "$INTELLIJ_ENVIRONMENT_READER" || "$TERMINAL_EMULATOR" == "JetBrains-JediTerm" ]]; then
+    unset PROMPT_COMMAND
+    PS1='$ '
+    PS2='> '
+    PS3=''
+    PS4='+ '
+    return 0
+fi
+
+# If running in chroot env load stripped down ver of bashrc
+# Note: ischroot is an external dependency from debianutils pkg
+
+# Portable version not relying on ischroot
+#if [[ "$(stat -c %i /)" != "2" ]]; then
+#   ...
+#fi
+#
+#if ischroot; then
+#    source "$HOME/.chrootrc"
+#    return 0
+#fi
+
+#===============================================================================
+# Utility Functions
+#===============================================================================
+# TODO: move these into ~/scripts/ and add to PATH
+
+# validate port is reachable
+
+function checkport() {
+    nmap "$1" -PN -p "$2" 2>/dev/null | grep "^$2" | grep -iE 'open|filtered'
+}
+
+# validate url is reachable
+
+function checkurl() {
+    local STATUS
+    STATUS=$(
+        curl --silent --head --location --fail -w '%{http_code}' --output /dev/null "$1"
+    )
+
+    if ((STATUS == 200)); then
+        echo "valid"
+    elif ((STATUS == 405)) && wget --spider "$1" 2>/dev/null; then
+        echo "valid"
+    else
+        echo "not valid"
+    fi
+}
+
+# validate passwordless ssh connections can be established (keys should be setup)
+
+function checkssh() {
+    if command ssh -q -o BatchMode=yes -o ConnectTimeout=5 "$@" 'echo' &>/dev/null; then
+        echo "valid"
+    else
+        echo "not valid"
+    fi
+}
+
+# extract any type of file
+
+function extract() {
+    local infile="$1"
+    local outdir''
+
+    if [[ ! -f "$infile" ]]; then
+        echo "${FUNCNAME[0]}(): file '$infile' not found"
+        return 1
+    fi
+
+    case "$infile" in
+    *.tar)
+        tar -xf "$infile"
+        ;;
+    *.tar.*)
+        tar -xaf "$infile"
+        ;;
+    *.bz2)
+        bunzip2 "$infile"
+        ;;
+    *.rar)
+        unrar x "$infile"
+        ;;
+    *.gz)
+        gunzip "$infile"
+        ;;
+    *.tbz2)
+        tar xjf "$infile"
+        ;;
+    *.tgz)
+        tar xzf "$infile"
+        ;;
+    *.zip)
+        unzip "$infile"
+        ;;
+    *.crx)
+        outdir="$(basename -s '.crx' "$infile")"
+        mkdir -p "$outdir" || {
+            echo "${FUNCNAME[0]}(): failed creating outout dir '$outdir'"
+            return 1
+        }
+        unzip -d "$outdir" "$infile"
+        ;;
+    *.Z)
+        uncompress "$infile"
+        ;;
+    *.7z)
+        7z x "$infile"
+        ;;
+    *.deb)
+        ar x "$infile"
+        ;;
+    *.rpm)
+        rpm2cpio "$infile" | cpio -idmv
+        ;;
+    *.xz)
+        xz --decompress "$infile"
+        ;;
+    *)
+        echo "${FUNCNAME[0]}(): failed extracting '$infile' unsupported ext"
+        return 1
+        ;;
+    esac
+
+    return 0
+}
+
+function unminify() {
+    local output_file=""
+    local input_file=""
+    local usage="Usage: unminify [-h] [-o <file>] <input_file>\n\nOptions:\n  -h, --help    Show this help message\n  -o <file>     Output to specified file (defaults to stdout if omitted)"
+
+    # 1. Parse operational flags via manual loop
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+        -h | --help)
+            echo -e "$usage"
+            return 0
+            ;;
+        -o | --output)
+            if [[ -z "$2" || "$2" == -* ]]; then
+                echo "Error: Option $1 requires an argument." >&2
+                return 1
+            fi
+            output_file="$2"
+            shift 2
+            ;;
+        -*)
+            echo "Error: Invalid option '$1'" >&2
+            echo -e "$usage" >&2
+            return 1
+            ;;
+        *)
+            if [[ -n "$input_file" ]]; then
+                echo "Error: Only one input file can be specified." >&2
+                return 1
+            fi
+            input_file="$1"
+            shift
+            ;;
+        esac
+    done
+
+    # 2. Validate input targets
+    if [[ -z "$input_file" ]]; then
+        echo "Error: Missing input file path." >&2
+        echo -e "$usage" >&2
+        return 1
+    fi
+
+    if [[ ! -f "$input_file" ]]; then
+        echo "Error: File '$input_file' not found." >&2
+        return 1
+    fi
+
+    # 3. Format assets and route output stream
+    case "${input_file##*.}" in
+    js | json)
+        if [[ -n "$output_file" ]]; then
+            esbuild "$input_file" --format=esm --minify=false --outfile="$output_file"
+        else
+            esbuild "$input_file" --format=esm --minify=false
+        fi
+        ;;
+    css)
+        if [[ -n "$output_file" ]]; then
+            esbuild "$input_file" --minify=false --outfile="$output_file"
+        else
+            esbuild "$input_file" --minify=false
+        fi
+        ;;
+    html)
+        if [[ -n "$output_file" ]]; then
+            tidy -indent -wrap 0 -quiet "$input_file" >"$output_file"
+        else
+            tidy -indent -wrap 0 -quiet "$input_file"
+        fi
+        ;;
+    xml | svg)
+    # -xml tells tidy to preserve XML structures and tags flawlessly
+        if [[ -n "$output_file" ]]; then
+            tidy -xml -indent -wrap 0 -quiet "$input_file" >"$output_file"
+        else
+            tidy -xml -indent -wrap 0 -quiet "$input_file"
+        fi
+        ;;
+    *)
+        echo "Error: Unsupported file extension." >&2
+        return 1
+        ;;
+    esac
+}
+
+# Usage:
+#   randomchars [-a|-d|-g|-x] [length]
+# Arguments:
+#   -a:         use alphabetic character set (A-Za-z)
+#   -d:         use digit character set (0-9)
+#   -g:         use graph character set (printable without space)
+#   -x:         use hexadecimal character set (0-9a-fA-F)
+#   length:     number of characters to generate (default 32)
+# Defaults:
+#   charset:    alphanumeric character set (A-Za-z0-9)
+
+function randomchars() {
+    local charset
+    local -i len
+    local -i blkmult
+
+
+    case "$1" in
+    -a)
+        charset='[:alpha:]'
+        blkmult=24
+        shift
+        ;;
+    -d)
+        charset='[:digit:]'
+        blkmult=32
+        shift
+        ;;
+    -g)
+        charset='[:graph:]'
+        blkmult=16
+        shift
+        ;;
+    -x)
+        charset='[:xdigit:]'
+        blkmult=16
+        shift
+        ;;
+    *)
+        charset='[:alnum:]'
+        blkmult=16
+        ;;
+    esac
+
+    if [[ -n "$1" ]]; then
+        [[ "$1" =~ ^[0-9]+$ ]] || {
+            echo "Usage: randomchars [-a|-d|-g|-x] [length]" >&2
+            return 1
+        }
+
+        len="$1"
+        shift
+    else
+        len=32
+    fi
+
+    dd if=/dev/urandom bs=$((len * blkmult)) count=1 2>/dev/null |
+        tr -dc "$charset" |
+        head -c "$len" &&
+        printf '\n'
+    return 0
+}
+
+# $1 == prefix for each arg
+# $2 == delimiter between args
+# $3 == suffix for each arg
+# $@ == args to join (optional, if missing reads from stdin)
+
+function joinwith() {
+    local start="$1"
+    local sep="$2"
+    local end="$3"
+    local IFS
+    local -a args
+    shift 3
+
+    if (($# > 0)); then
+        args=("$@")
+    elif [[ ! -t 0 ]]; then
+        mapfile -t args
+    fi
+
+    if ((${#args[@]} == 0)); then
+        return 0
+    fi
+
+    IFS=''
+    echo -n "$start${args[0]}$end"
+
+    if ((${#args[@]} > 1)); then
+        printf "${sep}${start}%s${end}" "${args[@]:1}"
+    fi
+
+    return 0
+}
+
+# get terminal title
+
+function gtitle() {
+    echo "$TERM_TITLE"
+}
+
+# change terminal title
+
+# shellcheck disable=SC2119,SC2120
+
+function ctitle() {
+    local _s
+
+    if [[ -n "$1" ]]; then
+        _s="$1"
+    elif [[ ! -t 0 ]]; then
+        _s="$(</dev/stdin)"
+    else
+        return 1
+    fi
+
+    printf '\e]2;%s\a' "$_s"
+    export TERM_TITLE="$_s"
+}
+
+# change current terminal profile
+# Usage: cprofile <profile number>
+# TODO: this was only tested on gnome-terminal
+
+function cprofile() {
+    xdotool key --delay 0 --clearmodifiers Shift+F10 r "$1"
+}
+
+# remove ansi escape sequences
+#function remesc() {
+#    ( [[ $# -eq 0 ]] && cat - || cat "${1}" ) |
+#    perl -pe "s|\e[\(\)\*\+\\\\\\/\-\\\`'][0-9A-Z<]||g" | #G0-3
+#    perl -pe 's/\e([^\[\]]|\[.*?[a-zA-Z]|\].*?\a)//g'   | #C0-1
+#    col -bp
+#}
+
+# evaluate real prompt string
+#function evalprompt() {
+#    PS_ARGS=$(eval 'echo -en "'${1}'"' | sed -e 's#\\\[##g' -e 's#\\\]##g')
+#    PS_STR=$(
+#        (set +x; (PS4="+.$PS_ARGS"; set -x; :) 2>&1) | cut -d':' -f1 | cut -d'.' -f2
+#    )
+#    echo -en "${PS_STR}"
+#}
+
+# TODO: utility for image file conversions
+#tosvg ()  { 
+#    local FILENAME="$1";
+#    local NAME="${FILENAME%.*}";
+#    convert -channel RGB -compress None -adaptive-sharpen 1 -quality 100 -scale 100% "$FILENAME" bmp:- | potrace -b svg - -o "${NAME}.svg"
+#}
+
+
+# git helpers moved to ~/scripts/dev-tools/git-{find-changes,stash-grep,add-submodules,clone-recursive}.sh
+
+# update the resolution of a serial/tty session
+
+function tty-resize() {
+    local old rows cols
+    old=$(stty -g)
+    stty raw -echo min 0 time 5
+    printf '\0337\033[r\033[999;999H\033[6n\0338' >/dev/tty
+    IFS='[;R' read -r _ rows cols _ </dev/tty
+    stty "$old"
+    stty cols "$cols" rows "$rows"
+}
+
+# send an alert with the status of the last command
+
+function alert() {
+    local _rc=$?
+    local _cmd
+    _cmd=$(
+        fc -lnr 0 -0 | awk -v fn="${FUNCNAME[0]}" '
+            NR == 1 {
+                gsub(/^[[:space:]]+|[[:space:]]+$/, _);
+                if ($0 == fn) { next; }
+                { print; exit; }
+            }
+            NR == 2 {
+                gsub(/^[[:space:]]+|[[:space:]]+$/, _);
+                { print; exit; }
+            }
+        '
+    )
+    if ((_rc == 0)); then
+        notify-send --urgency=low \
+            -i terminal \
+            -a "$(gtitle)   ✅✅" \
+            "$_cmd"
+    else
+        notify-send --urgency=low \
+            -i terminal \
+            -a "$(gtitle)   ☠☠" \
+            "$_cmd"
+    fi
+}
+
+# get a pseudo-random city name seeded by PPID
+# child terminals of this emulator will return the same value
+# NOTE: depends on city-names dictionary
+function gtermgroup() {
+    shuf -n 1 --random-source=<(
+        RANDOM=$PPID
+        while :; do
+            printf '%08x' $(((RANDOM << 15) | RANDOM))
+        done
+    ) "$HOME/.local/share/dict/city-names"
+}
+
+
+##### General Shell configuration
+
+# The terminal emulator we were spawned from
+# TODO: this is not correct in flatpak apps
+TERM_PROGRAM=$(basename "$(realpath -q /proc/"$PPID"/exe)")
+export TERM_PROGRAM
+# The current tty we are using
+TERM_NUMBER=$(tty | rev | cut -s -d '/' -f 1 | rev)
+export TERM_NUMBER
+# The name of this terminal emulators group
+TERM_GROUP=$(gtermgroup)
+export TERM_GROUP
+
+# History settings
+# https://paolo-cozzi.medium.com/bash-history-enhance-9e76bfe3084b
+# https://benjaminwuethrich.dev/2022-03-03-infinite-history.html
+# https://www.gnu.org/software/bash/manual/html_node/Bash-History-Facilities.html
+HISTFILE="$HOME/.bash_history/$TERM_PROGRAM"
+HISTIGNORE="exit:clear:reset:tput*:top:htop*:btop*:ls:grep"
+HISTCONTROL="ignoredups:erasedups"
+HISTSIZE=10000
+HISTFILESIZE=10000
+shopt -s histappend
+shopt -s cmdhist
+
+# check the window size after each command and, if necessary,
+# update the values of LINES and COLUMNS.
+shopt -s checkwinsize
+
+# If set, the pattern "**" used in a pathname expansion context will
+# match all files and zero or more directories and subdirectories.
+shopt -s globstar
+
+# Prevent accidental overwrites when using IO redirection
+shopt -qo noclobber
+
+# Don't auto expand when pasting multiline content
+bind 'set enable-bracketed-paste on'
+
+# Don't replace carriage returns with newlines on terminal input  ??
+# Only replace carriage return / newline when output in terminal  ??
+# Fixes copy paste trailing newline issues
+#stty -icrnl ocrnl onlcr
+
+#===============================================================================
+# Terminal / Prompt Modifications
+#===============================================================================
+
+# precomupted colors
+__C_RESET="\[$(tput sgr0)\]"
+__C_RED="\[$(tput setaf 1)\]"
+__C_GREEN="\[$(tput setaf 2)\]"
+__C_YELLOW="\[$(tput setaf 3)\]"
+__C_BLUE="\[$(tput setaf 4)\]"
+__C_MAGENTA="\[$(tput setaf 5)\]"
+__C_WHITE="\[$(tput setaf 7)\]"
+
+declare -A __bash_next_ps1=(
+    ['user']='__bash_git_ps1'
+    ['git']='__bash_user_ps1'
+)
+__bash_curr_ps1='user'
+
+function __bash_user_ps1() {
+    __bash_curr_ps1='user'
+    PS1="${__C_RED}[${__C_YELLOW}\u${__C_GREEN}@${__C_BLUE}\h ${__C_MAGENTA}\w${__C_RED}]${__C_WHITE}${__C_RESET} "
+}
+
+# fetch and parse git repo info
+# NOTE: async is an external dependency (from ~/scripts/)
+# TODO: add support for displaying branch info when interatively rebasing
+
+function __bash_git_ps1() {
+    __bash_curr_ps1='git'
+
+    local PROJECT_DIR
+    PROJECT_DIR=$(command git rev-parse --show-toplevel 2>/dev/null) || {
+        PS1="${__C_RED}[${__C_GREEN}\w ${__C_YELLOW}<invalid>${__C_RED}]${__C_RESET} "
+        return
+    }
+
+    # Trigger background fetch if stale — no -t flag so fetch always runs to completion
+    local FETCH_HEAD="$PROJECT_DIR/.git/FETCH_HEAD"
+    local LAST_FETCH
+    LAST_FETCH=$(stat -c %Y "$FETCH_HEAD" 2>/dev/null || echo 0)
+    if (($(date +%s) - LAST_FETCH > 600)); then
+        async -q git -C "$PROJECT_DIR" fetch -q --recurse-submodules=no
+    fi
+
+    local RELEASE_TAG PUSH_DST
+    RELEASE_TAG=$(command git describe --tags --abbrev=0 2>/dev/null)
+    PUSH_DST=$(command git rev-parse --abbrev-ref '@{push}' 2>/dev/null)
+
+    local LOCAL_BRANCH='' REMOTE_BRANCH='' REPO_STATE=''
+    local ab_ahead=0 ab_behind=0
+    local s_modified=0 s_untracked=0 s_new=0 s_renamed=0 s_deleted=0
+
+    # Single git call replaces: git branch --show-current, git rev-parse @{push},
+    # git status, and 8x (echo|grep) — eliminating ~18 process forks per prompt
+    local STATUS_OUT
+    STATUS_OUT=$(command git status --porcelain=v2 --branch --ignore-submodules 2>/dev/null)
+
+    while IFS= read -r line; do
+        case "$line" in
+        '# branch.head '*)
+            LOCAL_BRANCH="${line#'# branch.head '}"
+            ;;
+        '# branch.upstream '*)
+            REMOTE_BRANCH="${line#'# branch.upstream '}"
+            ;;
+        '# branch.ab '*)
+            local _ab="${line#'# branch.ab '}"
+            ab_ahead="${_ab% *}"
+            ab_ahead="${ab_ahead#+}"
+            ab_behind="${_ab#* }"
+            ab_behind="${ab_behind#-}"
+            ;;
+        '1 '*) # ordinary changed entries — XY flags at positions 2-3
+            local _xy="${line:2:2}"
+            [[ "$_xy" == *[Mm]* ]] && s_modified=1
+            [[ "$_xy" == *[Dd]* ]] && s_deleted=1
+            [[ "$_xy" == *[Aa]* ]] && s_new=1
+            ;;
+        '2 '*) s_renamed=1 ;; # renamed/copied entry
+        '? '*) s_untracked=1 ;; # untracked file
+        esac
+    done <<<"$STATUS_OUT"
+
+    ((s_modified)) && REPO_STATE+='!'
+    ((s_untracked)) && REPO_STATE+='?'
+    ((s_new)) && REPO_STATE+='+'
+    ((s_renamed)) && REPO_STATE+='>'
+    ((s_deleted)) && REPO_STATE+='x'
+    ((ab_behind)) && REPO_STATE+='&'
+    ((ab_ahead)) && REPO_STATE+='*'
+    ((ab_ahead && ab_behind)) && REPO_STATE+='☠'
+    [[ -z "$PUSH_DST" ]] && REPO_STATE+='⬆'
+
+    local _tag='' _state=''
+    [[ -n "$RELEASE_TAG" ]] && _tag=" ${__C_MAGENTA}${RELEASE_TAG}"
+    [[ -n "$REPO_STATE" ]] && _state=" ${__C_YELLOW}${REPO_STATE}"
+    PS1="${__C_RED}(${__C_GREEN}$(basename "$PROJECT_DIR")${__C_RED})["
+    if [[ "$LOCAL_BRANCH" == '(detached)' ]]; then
+        PS1+="${__C_YELLOW}<detached>${_tag}${__C_RED}]${__C_RESET} "
+    elif [[ -z "$REMOTE_BRANCH" ]]; then
+        PS1+="${__C_BLUE}${LOCAL_BRANCH}${_tag}${_state}${__C_RED}]${__C_RESET} "
+    else
+        PS1+="${__C_BLUE}${LOCAL_BRANCH}...${REMOTE_BRANCH}${_tag}${_state}${__C_RED}]${__C_RESET} "
+    fi
+}
+
+function __bash_set_ps1() {
+    if [[ -d '.git/' ]]; then
+        __bash_git_ps1
+    else
+        __bash_user_ps1
+    fi
+}
+
+function toggleps1() {
+    PROMPT_COMMAND="${__bash_next_ps1[$__bash_curr_ps1]}"
+}
+
+function resetps1() {
+    PROMPT_COMMAND='__bash_set_ps1'
+}
+
+# set terminal title
+# NOTE: some terminals do not support all CSI codes
+printf '(%s) [%02d]' "$TERM_GROUP" "$TERM_NUMBER" | ctitle
+
+# set shell prompt
+PS1='$ '
+PS2="${__C_RED}[${__C_YELLOW}=${__C_GREEN}=${__C_BLUE}=${__C_MAGENTA}>${__C_RESET} "
+PS3=""
+PS4='+ '
+PROMPT_COMMAND='__bash_set_ps1'
+
+#===============================================================================
+# Custom Command Overrides
+#===============================================================================
+
+# extends git command functionality
+# - shadows git binary
+# - exports remote info for git hooks when commiting
+# TODO: add bash completion for new options
+# DEPRECATED: moved to /usr/local/bin/
+#function git() {
+#    local ARGS=() COMMIT_FLAG=0 REMOTE_NAME="origin"
+#    
+#    while (( $# > 0 )); do
+#        case "$1" in
+#            commit)
+#                ARGS+=("$1")
+#                COMMIT_FLAG=1
+#                shift
+#                ;;
+#            --remote=*)
+#                if (( ${COMMIT_FLAG} == 1 )); then
+#                    REMOTE_NAME=$(printf '%s' "$1" | cut -d '=' -f 2-)
+#                else
+#                    ARGS+=("$1")
+#                fi
+#                shift
+#                ;;
+#            *)
+#                ARGS+=("$1")
+#                shift
+#                ;;
+#        esac
+#    done
+#
+#    export REMOTE_NAME
+#    command git "${ARGS[@]}"
+#    unset REMOTE_NAME
+#}
+
+# extends ssh command functionality
+# - shadows ssh binary
+# - retain local terminal title when connecting
+#function ssh() {
+#    local TTY_ALLOCATED=0
+#    local OPTS=()
+#    local ARGS=()
+#
+#    while (( $# > 0 )); do
+#        case "$1" in
+#            -t*)
+#                TTY_ALLOCATED=1
+#                OPTS+=("$1")
+#                shift
+#                ;;
+#            -4|-6|-A|-a|-C|-f|-G|-g|-K|-k|-M|-N|-n|-q|-s|-T|-V|-v*|-X|-x|-Y|-y)
+#                OPTS+=("$1")
+#                shift
+#                ;;
+#            -B|-b|-c|-D|-E|-e|-F|-I|-i|-J|-L|-l|-m|-O|-o|-p|-Q|-R|-S|-W|-w)
+#                OPTS+=("$1" "$2")
+#                shift; shift
+#                ;;
+#            *)
+#                ARGS+=("$1")
+#                shift
+#        esac
+#    done
+#
+#    if (( ${TTY_ALLOCATED} == 0 )); then
+#        OPTS+=("-t")
+#    fi
+#
+#    if (( ${#ARGS[@]} <= 1 )); then
+#        command ssh "${OPTS[@]}" "${ARGS[@]}" "$(typeset -f ctitle); export -f ctitle; export TITLE='$(gtitle)'; export PROMPT_COMMAND='ctitle "'${TITLE}'"'; bash -i -l"
+#    else
+#        command ssh "${OPTS[@]}" "${ARGS[0]}" "$(typeset -f ctitle); export -f ctitle; export TITLE='$(gtitle)'; export PROMPT_COMMAND='ctitle "'${TITLE}'"'; ${ARGS[@]:1}"
+#    fi
+#}
+
+# disable scrollbar when entering vim and re-enable when exiting
+# - shadows vim binary
+# - keybindings are different on different terminals
+# - profile 1 is the default
+# - profile 2 has no scrollbar
+#case "$TERM_PROGRAM" in
+#    terminator)
+#        function vim() {
+#            xdotool key --delay 1 Shift+F11 \
+#                exec --sync --args $(($#+1)) $(type -P vim) "$@" \
+#                key --delay 3 Shift+F11
+#        }
+#        ;;
+#    gnome-terminal-server)
+#        function vim() {
+#            xdotool key --delay 0ms Shift+F10 key --delay 3ms r 2 \
+#                exec --sync --args $(($#+1)) $(type -P vim) "$@" \
+#                key --delay 0ms Shift+F10 key --delay 3ms r 1
+#        }
+#        ;;
+#esac
+
+#===============================================================================
+# General Application Settings / Aliases
+#===============================================================================
+
+# TODO: replace ls / dircolors with eza
+
+# Default linux tools
+# * configure color support and defaults / aliases for standard linux tools
+# - shadow:     grep      =>    ugrep
+# - shadow:     egrep     =>    ugrep
+# - shadow:     fgrep     =>    ugrep
+# - shadow:     rgrep     =>    ugrep
+# - shadow:     diff      =>    vimdiff
+# - replace:    colordiff =>    vimdiff
+# - add:        ripgrep   =>    rg
+if [[ -x /usr/bin/dircolors ]]; then
+    if test -r ~/.dircolors; then
+        eval "$(dircolors -b ~/.dircolors)"
+    else
+        eval "$(dircolors -b)"
+    fi
+    alias ls='ls --color=auto'
+    alias dir='dir --color=auto'
+    alias vdir='vdir --color=auto'
+    alias grep='/usr/bin/ugrep -G -Y --no-config --color=auto'
+    alias egrep='/usr/bin/ugrep -E -Y --no-config --color=auto'
+    alias fgrep='/usr/bin/ugrep -F -Y --no-config --color=auto'
+    alias rgrep='/usr/bin/ugrep -r -Y --no-config --color=auto'
+    alias ug='/usr/bin/ug --color=auto'
+    alias ugrep='/usr/bin/ugrep --hidden --color=auto'
+    alias rg='/usr/bin/rg --include-zero --hyperlink-format=kitty --color=auto'
+    alias ripgrep='/usr/bin/rg -uu --hyperlink-format=none --color=auto'
+else
+    alias grep='/usr/bin/ugrep -G -Y --no-config --hidden --color=never'
+    alias egrep='/usr/bin/ugrep -E -Y --no-config --hidden --color=never'
+    alias fgrep='/usr/bin/ugrep -F -Y --no-config --hidden --color=never'
+    alias rgrep='/usr/bin/ugrep -r -Y --no-config --hidden --color=never'
+    alias ug='/usr/bin/ug --hyperlink --color=never'
+    alias ugrep='/usr/bin/ugrep --hidden --no-hyperlink --color=never'
+    alias rg='/usr/bin/rg --include-zero --hyperlink-format=default --color=never'
+    alias ripgrep='/usr/bin/rg -uu --hyperlink-format=none --color=never'
+fi
+alias diff='vimdiff'
+alias colordiff='vimdiff'
+
+# colored GCC warnings and errors
+export GCC_COLORS='error=01;31:warning=01;35:note=01;36:caret=01;32:locus=01:quote=01'
+
+# Flatpak app aliases
+function librewolf() { flatpak run --command=librewolf io.gitlab.librewolf-community -- "$@"; }
+function chromium() { flatpak run --command=chromium io.github.ungoogled_software.ungoogled_chromium -- "$@"; }
+function loupe() { flatpak run --command=loupe org.gnome.Loupe -- "$@"; }
+function thunderbird() { flatpak run --command=thunderbird org.mozilla.thunderbird -- "$@"; }
+
+# Compression Tools
+# - replace: zpaq  =>  zpaqfranz (newer fork with many improvements)
+alias zpaq='zpaqfranz'
+
+# Prevent accidental overwrites when using dangerous commands
+alias cp='cp -i --one-file-system'
+alias mv='mv -i'
+alias rm='rm -I --one-file-system'
+alias rename='rename.ul -ia'
+
+# UI-related tools / useful shorthands
+alias xcp='xclip -selection clipboard'
+alias xcopy='xclip -selection clipboard'
+alias xpt='xclip -selection clipboard -o'
+alias xpaste='xclip -selection clipboard -o'
+alias wcp='wl-copy'
+alias wcopy='wl-copy'
+alias wpt='wl-paste'
+alias wpaste='wl-paste'
+alias cls='tput reset'
+
+#=============================================================================================
+# Shell Helper Functions
+#=============================================================================================
+
+# Same rules as the ~/.profile __shell_path_* helpers: entries must be absolute and free of
+# ":", trailing slashes are dropped and "dir/" counts as "dir". bash variables are dynamically
+# scoped, so these update the caller's "local -x PATH" when it has one.
+
+# Succeed when "$1" can be a PATH entry; warn on stderr otherwise. A value with
+# non-printable characters is not printed, so it cannot send escape sequences to the terminal.
+function __bash_path_valid() {
+    local reason shown="'$1'"
+    case "$1" in
+        '')  reason='empty' ;;
+        *:*) reason='contains ":"' ;;
+        /*)  return 0 ;;
+        *)   reason='not an absolute path' ;;
+    esac
+    [[ "$1" == *[![:print:]]* ]] && shown='<has non-printable characters>'
+    printf '%s: skipping PATH entry %s: %s\n' "${FUNCNAME[1]}" "$shown" "$reason" >&2
+    return 1
+}
+
+# Put "$1" first in PATH, moving it there if it is already present
+function __bash_path_prepend() {
+    __bash_path_valid "${1-}" || return
+    local dir="$1" rest=":${PATH-}:"
+    while [[ "$dir" == ?*/ ]]; do dir="${dir%/}"; done
+    # repeated: one pass skips the second of two adjacent copies (":dir:dir:")
+    while [[ "$rest" == *":$dir:"* || "$rest" == *":$dir/:"* ]]; do
+        rest="${rest//":$dir:"/:}"
+        rest="${rest//":$dir/:"/:}"
+    done
+    rest="${rest#:}"
+    rest="${rest%:}"
+    PATH="$dir${rest:+:$rest}"
+}
+
+# Add "$1" last in PATH, unless it is already present anywhere
+function __bash_path_append() {
+    __bash_path_valid "${1-}" || return
+    local dir="$1"
+    while [[ "$dir" == ?*/ ]]; do dir="${dir%/}"; done
+    [[ ":${PATH-}:" == *":$dir:"* || ":${PATH-}:" == *":$dir/:"* ]] || PATH="${PATH:+$PATH:}$dir"
+}
+
+#=============================================================================================
+# Pager / Docs Tools
+#=============================================================================================
+
+# Texinfo manuals open in nvimpager (info.nvim) and manpage-only topics in man; options, more
+# than two arguments or output that is not a terminal go to the real info
+function info() {
+    local where IFS=' '
+    local -a topic
+    if [[ -t 1 ]] && (( $# > 0 && $# <= 2 )) && [[ "$1" != -* ]]; then
+        where="$(command info --where "$@" 2>/dev/null)"
+        if [[ "$where" == '*manpages*' ]]; then
+            man "$1"
+            return
+        elif [[ -n "$where" ]]; then
+            # backslashes and spaces escaped for the :Info command line
+            topic=("${@//\\/\\\\}")
+            topic=("${topic[@]// /\\ }")
+            nvimpager -p -- -c "Info ${topic[*]}" -c only
+            return
+        fi
+    fi
+    command info "$@"
+}
+
+#=============================================================================================
+# LLM CLI Tools
+#=============================================================================================
+
+# Junie CLI
+# - JUNIE_NO_SANDBOX environment var disables the sandbox lock when launching
+# - PATH extended with custom agent tools (used in custom commands as well)
+# - mise Safe Mode set to prevent agent loading arbitrary configs
+# - PATH and the settings are function-local exports (local -x): only junie sees them
+function junie() {
+    local tools="$HOME/.junie/custom/bin"
+    local -a flags=(
+        --skip-update-check
+        --use-version
+        --use-local-cache
+        --share-anonymous-statistics false
+    )
+    [[ -z "${JUNIE_NO_SANDBOX-}" ]] && flags+=(--sandbox)
+
+    local -x MISE_SAFE=1 PATH="$PATH"
+    [[ -d "$tools" ]] && __bash_path_prepend "$tools"
+
+    command junie "${flags[@]}" "$@"
+}
+
+# Claude Code
+# - anthropic is known for feeding off your soul whenever you are not looking..
+# - other settings are same as junie cli above
+# TODO: consider adding "--restricted"
+# REF:  https://code.claude.com/docs/en/cli-reference#cli-flags
+# REF:  https://code.claude.com/docs/en/sandboxing
+function claude() {
+    local tools="$HOME/.claude/custom/bin"
+
+    local -x MISE_SAFE=1 PATH="$PATH"
+    local -x CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL=1
+    local -x CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1
+    local -x DISABLE_NON_ESSENTIAL_MODEL_CALLS=1
+    local -x DISABLE_TELEMETRY=1
+    local -x DISABLE_ERROR_REPORTING=1
+    local -x DISABLE_FEEDBACK_COMMAND=1
+    [[ -d "$tools" ]] && __bash_path_prepend "$tools"
+
+    command claude --strict-mcp-config "$@"
+}
+

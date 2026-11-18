@@ -1,0 +1,128 @@
+# shellcheck shell=ksh
+
+#=============================================================================================
+# Shell Helper Functions
+#=============================================================================================
+# typeset is function-local only in "function name { ...; }" definitions, which are statically
+# scoped; POSIX "name()" functions run in the caller's scope instead
+
+# Same rules as the ~/.profile __shell_path_* helpers: entries must be absolute and free of
+# ":", trailing slashes are dropped and "dir/" counts as "dir". POSIX form so they update the
+# caller's "typeset -x PATH" when it has one (a nameref declared in a "function" helper still
+# resolves to the global PATH); with no locals there, positional parameters and the
+# __ksh_path_* variable hold intermediate values.
+
+# Succeed when "$1" can be a PATH entry; warn on stderr as "$2" otherwise. A value with
+# non-printable characters is not printed, so it cannot send escape sequences to the terminal.
+__ksh_path_valid() {
+    case $1 in
+        '')  set -- "$1" "$2" 'empty' ;;
+        *:*) set -- "$1" "$2" 'contains ":"' ;;
+        /*)  return 0 ;;
+        *)   set -- "$1" "$2" 'not an absolute path' ;;
+    esac
+    case $1 in
+        *[![:print:]]*) set -- '<has non-printable characters>' "$2" "$3" ;;
+        *) set -- "'$1'" "$2" "$3" ;;
+    esac
+    printf '%s: skipping PATH entry %s: %s\n' "$2" "$1" "$3" >&2
+    return 1
+}
+
+# Put "$1" first in PATH, moving it there if it is already present
+__ksh_path_prepend() {
+    __ksh_path_valid "${1-}" __ksh_path_prepend || return
+    set -- "${1%%+(/)}"
+    set -- "${1:-/}"
+    __ksh_path_rest=:${PATH-}:
+    # repeated: one pass skips the second of two adjacent copies (":dir:dir:")
+    # (a "/" ends the pattern of ${var//pattern/...}, so "?(/)" cannot be used there)
+    while [[ $__ksh_path_rest == *:"$1"?(/):* ]]; do
+        __ksh_path_rest=${__ksh_path_rest//:"$1":/:}
+        __ksh_path_rest=${__ksh_path_rest//:"$1/":/:}
+    done
+    __ksh_path_rest=${__ksh_path_rest#:}
+    __ksh_path_rest=${__ksh_path_rest%:}
+    PATH=$1${__ksh_path_rest:+:$__ksh_path_rest}
+    unset __ksh_path_rest
+}
+
+# Add "$1" last in PATH, unless it is already present anywhere
+__ksh_path_append() {
+    __ksh_path_valid "${1-}" __ksh_path_append || return
+    set -- "${1%%+(/)}"
+    set -- "${1:-/}"
+    [[ :${PATH-}: == *:"$1"?(/):* ]] || PATH=${PATH:+$PATH:}$1
+}
+
+#=============================================================================================
+# Pager / Docs Tools
+#=============================================================================================
+
+# Texinfo manuals open in nvimpager (info.nvim) and manpage-only topics in man; options, more
+# than two arguments or output that is not a terminal go to the real info
+function info {
+    typeset where IFS=' '
+    typeset -a topic
+    if [[ -t 1 ]] && (( $# > 0 && $# <= 2 )) && [[ $1 != -* ]]; then
+        where=$(command info --where "$@" 2>/dev/null)
+        if [[ $where == '*manpages*' ]]; then
+            man "$1"
+            return
+        elif [[ -n $where ]]; then
+            # backslashes and spaces escaped for the :Info command line
+            topic=("${@//\\/\\\\}")
+            topic=("${topic[@]// /\\ }")
+            nvimpager -p -- -c "Info ${topic[*]}" -c only
+            return
+        fi
+    fi
+    command info "$@"
+}
+
+#=============================================================================================
+# LLM CLI Tools
+#=============================================================================================
+
+# Junie CLI
+# - JUNIE_NO_SANDBOX environment var disables the sandbox lock when launching
+# - PATH extended with custom agent tools (used in custom commands as well)
+# - mise Safe Mode set to prevent agent loading arbitrary configs
+# - PATH and the settings are function-local exports (typeset -x): only junie sees them
+function junie {
+    typeset tools=$HOME/.junie/custom/bin
+    typeset -a flags=(
+        --skip-update-check
+        --use-version
+        --use-local-cache
+        --share-anonymous-statistics false
+    )
+    [[ -z ${JUNIE_NO_SANDBOX-} ]] && flags+=(--sandbox)
+
+    typeset -x MISE_SAFE=1 PATH=$PATH
+    [[ -d $tools ]] && __ksh_path_prepend "$tools"
+
+    command junie "${flags[@]}" "$@"
+}
+
+# Claude Code
+# - anthropic is known for feeding off your soul whenever you are not looking..
+# - other settings are same as junie cli above
+# TODO: consider adding "--restricted"
+# REF:  https://code.claude.com/docs/en/cli-reference#cli-flags
+# REF:  https://code.claude.com/docs/en/sandboxing
+function claude {
+    typeset tools=$HOME/.claude/custom/bin
+
+    typeset -x MISE_SAFE=1 PATH=$PATH
+    typeset -x CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL=1
+    typeset -x CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1
+    typeset -x DISABLE_NON_ESSENTIAL_MODEL_CALLS=1
+    typeset -x DISABLE_TELEMETRY=1
+    typeset -x DISABLE_ERROR_REPORTING=1
+    typeset -x DISABLE_FEEDBACK_COMMAND=1
+    [[ -d $tools ]] && __ksh_path_prepend "$tools"
+
+    command claude --strict-mcp-config "$@"
+}
+
