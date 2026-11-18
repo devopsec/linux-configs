@@ -53,11 +53,16 @@ function vim_configure_home() {
     [[ "$RESOLVED_INSTALL_MODE" == system && $EUID != 0 ]] && link_as_root=1
 
     if app_selected vim; then
-        install_file "$as_root" "$VIM_INSTALL_DIR/vim/vimrc.vim" "$target_home/.vimrc" -f
+        install_file "$as_root" "$VIM_INSTALL_DIR/vim/vimrc.vim" "$target_home/.vimrc"
     fi
 
     if app_selected vimpager; then
-        install_file "$as_root" "$VIM_INSTALL_DIR/vimpager/vimpagerrc" "$target_home/.vimpagerrc" -f
+        install_file "$as_root" "$VIM_INSTALL_DIR/vimpager/vimpagerrc" "$target_home/.vimpagerrc"
+    fi
+
+    # which-key menu shared by vimrc and vimpagerrc
+    if app_selected vim || app_selected vimpager; then
+        install_file "$as_root" "$VIM_INSTALL_DIR/vim/autoload/xwhichkey.vim" "$target_home/.vim/autoload/xwhichkey.vim"
     fi
 
     # symlink the vendored pager from the .deb onto PATH (resolved_bin_dir() always precedes
@@ -71,17 +76,22 @@ function vim_configure_home() {
 function vim_clean_home() {
     local target_home="$1" as_root="${2:-0}"
     app_selected vim && remove_paths "$as_root" "$target_home/.vim" "$target_home/.vimrc" "$target_home/.viminfo"
-    app_selected vimpager && remove_paths "$as_root" "$target_home/.vimpagerrc"
+    app_selected vimpager && remove_paths "$as_root" "$target_home/.vimpagerrc" "$target_home/.vim/autoload/xwhichkey.vim"
     return 0
 }
 
 function vim_configure_global() {
     if app_selected vim; then
-        install_file 1 "$VIM_INSTALL_DIR/vim/vimrc.vim" /etc/vim/vimrc.local -f
+        install_file 1 "$VIM_INSTALL_DIR/vim/vimrc.vim" /etc/vim/vimrc.local
     fi
 
     if app_selected vimpager; then
-        install_file 1 "$VIM_INSTALL_DIR/vimpager/vimpagerrc" /etc/vimpagerrc -f
+        install_file 1 "$VIM_INSTALL_DIR/vimpager/vimpagerrc" /etc/vimpagerrc
+    fi
+
+    # /etc/vim is on Vim's default 'runtimepath'
+    if app_selected vim || app_selected vimpager; then
+        install_file 1 "$VIM_INSTALL_DIR/vim/autoload/xwhichkey.vim" /etc/vim/autoload/xwhichkey.vim
     fi
     return 0
 }
@@ -89,6 +99,7 @@ function vim_configure_global() {
 function vim_clean_global() {
     if app_selected vim; then remove_paths 1 /etc/vim/vimrc.local; fi
     if app_selected vimpager; then remove_paths 1 /etc/vimpagerrc; fi
+    if app_selected vim || app_selected vimpager; then remove_paths 1 /etc/vim/autoload/xwhichkey.vim; fi
     return 0
 }
 

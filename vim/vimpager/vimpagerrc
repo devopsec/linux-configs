@@ -3,6 +3,9 @@
 " https://github.com/rkitover/vimpager
 " ============================================================================
 
+" Disable vi compatibility settings (line continuations below need it)
+set nocompatible
+
 " Backspace modification
 set backspace=indent,eol,start
 
@@ -58,8 +61,9 @@ set ttimeoutlen=0
 " shell script is paged/edited here).
 autocmd FileType sh,bash let b:sh_indent_options = {'case-labels': 0}
 
-" Block cursor while paging (terminal vim ignores 'guicursor')
-if !has('gui_running')
+" Block cursor while paging (terminal vim ignores 'guicursor'; Neovim, which
+" vimpager runs when $EDITOR is nvim, has no echoraw() and uses 'guicursor')
+if !has('gui_running') && !has('nvim')
     augroup xvim_pager_cursor
         autocmd!
         autocmd VimEnter * call echoraw("\e[2 q")
@@ -74,4 +78,130 @@ if isdirectory(s:info_vim_dir)
     filetype plugin on
     autocmd FileType info nnoremap <buffer> <silent> q <Cmd>quit<CR>
     autocmd FileType info nnoremap <buffer> <silent> <BS> <C-o>
+endif
+
+" :Man before any manual page has been loaded
+runtime ftplugin/man.vim
+
+" <Space> (leader) mappings: <Space> opens a which-key menu of them right away;
+" it stays open after running one (hydra mode) until <Esc>. nvimpager defines
+" the same set. Prompts (:help, :Man, :Info) are not <silent>.
+"
+" vimpager runs Neovim when $EDITOR is nvim: the menu is then which-key.nvim
+" from the nvim config's plugins, with its hydra/navigation tweaks
+" (~/.config/nvim/lua/setup/whichkey.lua). In Vim it is
+" ~/.vim/autoload/xwhichkey.vim (installed with vim or vimpager).
+let mapleader = " "
+let maplocalleader = " "
+if has('nvim')
+    let s:whichkey_dir = expand('~/.local/share/nvim/lazy/which-key.nvim')
+    let s:whichkey = isdirectory(s:whichkey_dir)
+    if s:whichkey
+        execute 'set runtimepath+=' . fnameescape(s:whichkey_dir)
+    endif
+    let s:whichkey_open = "<Cmd>lua require('which-key').show({ keys = '<leader>', loop = true })<CR>"
+else
+    let s:whichkey = !empty(globpath(&runtimepath, 'autoload/xwhichkey.vim'))
+        \ && exists('*popup_create') && exists('*maplist')
+    let s:whichkey_open = "<Cmd>call xwhichkey#open('n', '<leader>')<CR>"
+endif
+
+function! s:Leader(lhs, rhs, desc, ...) abort
+    let l:silent = get(a:000, 0, 1)
+    if has('nvim')
+        call nvim_set_keymap('n', '<leader>' . a:lhs, a:rhs,
+            \ {'noremap': v:true, 'silent': l:silent ? v:true : v:false, 'desc': a:desc})
+    elseif s:whichkey
+        call xwhichkey#map('n', '<leader>' . a:lhs, a:rhs, a:desc, {'silent': l:silent})
+    else
+        execute 'nnoremap ' . (l:silent ? '<silent> ' : '') . '<leader>' . a:lhs . ' ' . a:rhs
+    endif
+endfunction
+
+call s:Leader('qq', '<Cmd>qa<CR>', 'Quit All')
+call s:Leader('-', '<C-W>s', 'Split Window Below')
+call s:Leader('<Bar>', '<C-W>v', 'Split Window Right')
+
+call s:Leader('bb', '<C-^>', 'Switch to Other Buffer')
+call s:Leader('bn', '<Cmd>bnext<CR>', 'Next Buffer')
+call s:Leader('bp', '<Cmd>bprevious<CR>', 'Previous Buffer')
+call s:Leader('bd', '<Cmd>bdelete<CR>', 'Delete Buffer')
+
+call s:Leader('sw', '*', 'Search Word Under Cursor')
+call s:Leader('sh', ':help<Space>', 'Help Page', 0)
+call s:Leader('sm', ':Man<Space>', 'Man Page', 0)
+call s:Leader('si', ':Info<Space>', 'Info Manual', 0)
+
+call s:Leader('uw', '<Cmd>setlocal wrap! wrap?<CR>', 'Toggle Wrap')
+call s:Leader('ul', '<Cmd>setlocal number! number?<CR>', 'Toggle Line Numbers')
+call s:Leader('uL', '<Cmd>setlocal relativenumber! relativenumber?<CR>', 'Toggle Relative Number')
+call s:Leader('uc', '<Cmd>setlocal cursorline! cursorline?<CR>', 'Toggle Cursor Line')
+call s:Leader('uh', '<Cmd>set hlsearch! hlsearch?<CR>', 'Toggle Search Highlight')
+call s:Leader('ur', '<Cmd>nohlsearch<Bar>redraw!<CR>', 'Redraw / Clear hlsearch')
+
+call s:Leader('wd', '<C-W>c', 'Delete Window')
+call s:Leader('wo', '<C-W>o', 'Close Other Windows')
+call s:Leader('ww', '<C-W>p', 'Other Window')
+
+if s:whichkey && has('nvim')
+    call s:Leader('?', "<Cmd>lua require('which-key').show({ global = false })<CR>", 'Buffer Keymaps (which-key)')
+    execute 'lua local ok, tweaks = pcall(require, "setup.whichkey"); '
+        \ . 'local opts = { triggers = { { "<leader>", mode = "n" } }, spec = { '
+        \ . '{ "<leader>b", group = "buffer" }, { "<leader>q", group = "quit" }, '
+        \ . '{ "<leader>s", group = "search" }, { "<leader>u", group = "ui" }, '
+        \ . '{ "<leader>w", group = "windows" }, { "<leader>v", desc = "Toggle Less Mode" }, '
+        \ . '{ "<leader>h", desc = "Less Mode Help" }, { "<leader>H", desc = "Less Mode Help" } } }; '
+        \ . 'require("which-key").setup(ok and tweaks.opts(opts) or opts); '
+        \ . 'if ok then tweaks.patch() end'
+elseif s:whichkey
+    call xwhichkey#map('n', '<leader>?', "<Cmd>call xwhichkey#open('n', '', {'buffer': 1, 'title': 'Buffer Keymaps'})<CR>", 'Buffer Keymaps (which-key)')
+    " less.vim's own <Leader>v, <Leader>h and <Leader>H
+    call xwhichkey#describe('n', '<leader>v', 'Toggle Less Mode')
+    call xwhichkey#describe('n', '<leader>h', 'Less Mode Help')
+    call xwhichkey#describe('n', '<leader>H', 'Less Mode Help')
+    call xwhichkey#group('n', '<leader>b', 'buffer')
+    call xwhichkey#group('n', '<leader>q', 'quit')
+    call xwhichkey#group('n', '<leader>s', 'search')
+    call xwhichkey#group('n', '<leader>u', 'ui')
+    call xwhichkey#group('n', '<leader>w', 'windows')
+    execute 'nnoremap <silent> <nowait> <Space> ' . s:whichkey_open
+endif
+
+if s:whichkey
+    " less mode (less.vim) maps <Space> to page down in each buffer, and f,
+    " <C-F>, <C-V>, <PageDown> through it: <Space> opens the menu instead and
+    " the other keys page down directly. Applied after less.vim's own
+    " BufWinEnter handler, and on the next cursor move after <Leader>v turns
+    " less mode back on. In Neovim the "which-key-trigger" description keeps
+    " which-key from listing the mapping itself.
+    function! s:PagerSpace() abort
+        let l:page = maparg('<Space>', 'n', 0, 1)
+        " (which-key.nvim's own trigger is a Lua callback without an rhs)
+        if empty(l:page) || !l:page.buffer || has_key(l:page, 'callback')
+            \ || get(l:page, 'rhs', '') =~# 'which-key\|xwhichkey#' || get(l:page, 'desc', '') =~# 'which-key'
+            return
+        endif
+        for l:key in ['f', '<C-F>', '<C-V>', '<PageDown>']
+            let l:map = maparg(l:key, 'n', 0, 1)
+            if !empty(l:map) && l:map.buffer && get(l:map, 'rhs', '') ==# '<Space>'
+                let l:new = extend(copy(l:page), {'lhs': l:key, 'lhsraw': eval('"' . substitute(l:key, '^<', '\\<', '') . '"')})
+                if has_key(l:new, 'lhsrawalt')
+                    call remove(l:new, 'lhsrawalt')
+                endif
+                call mapset('n', 0, l:new)
+            endif
+        endfor
+        if has('nvim')
+            call nvim_buf_set_keymap(0, 'n', '<Space>', s:whichkey_open,
+                \ {'noremap': v:true, 'silent': v:true, 'nowait': v:true, 'desc': 'which-key-trigger'})
+        else
+            execute 'nnoremap <buffer> <silent> <nowait> <Space> ' . s:whichkey_open
+        endif
+    endfunction
+
+    augroup xvim_pager_whichkey
+        autocmd!
+        autocmd BufWinEnter * call timer_start(0, {-> s:PagerSpace()})
+        autocmd CursorMoved * call s:PagerSpace()
+    augroup END
 endif

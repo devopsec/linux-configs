@@ -23,8 +23,8 @@ endif
 " statusline text in the background (it only checks g:airline_disable_
 " statusline, not &laststatus -- see airline#util#stl_disabled()), and
 " XVimRenderStatusPopup() below paints that text into a popup pinned to
-" the last screen row instead, reclaiming the row that used to sit blank
-" between the statusline and the command line.
+" the last screen row instead, so Vim's messages (on the command-line row
+" above it, see 'cmdheight') show right above the status bar.
 set laststatus=0
 
 
@@ -199,7 +199,9 @@ set noshowmode
 set noruler
 set noshowcmd
 set shortmess+=F
-set cmdheight=1
+" Two command-line rows: messages start on the upper one, right above the
+" status bar popup that covers the lower one (see XVimRenderStatusPopup())
+set cmdheight=2
 
 " Disable audio bell on error
 set noerrorbells
@@ -307,9 +309,20 @@ function! s:on_lsp_buffer_enabled() abort
     nmap <buffer> gd <Plug>(lsp-definition)
     nmap <buffer> gr <Plug>(lsp-references)
     nmap <buffer> K <Plug>(lsp-hover)
-    nmap <buffer> <leader>ca <Plug>(lsp-code-action)
-    nmap <buffer> <leader>cr <Plug>(lsp-rename)
     nmap <buffer> <F4> <Plug>(lsp-document-format)
+    call s:LspLeader('ca', '<Plug>(lsp-code-action)', 'Code Action')
+    call s:LspLeader('cr', '<Plug>(lsp-rename)', 'Rename')
+    call s:LspLeader('cf', '<Plug>(lsp-document-format)', 'Format')
+    call s:LspLeader('cl', '<Cmd>LspStatus<CR>', 'Lsp Info')
+endfunction
+
+" buffer-local <leader> mapping with a which-key description (see below)
+function! s:LspLeader(lhs, rhs, desc) abort
+    if s:xwhichkey
+        call xwhichkey#map('n', '<leader>' . a:lhs, a:rhs, a:desc, {'buffer': 1, 'remap': 1})
+    else
+        execute 'nmap <buffer> <leader>' . a:lhs . ' ' . a:rhs
+    endif
 endfunction
 
 augroup LspBufferEnabled
@@ -434,34 +447,19 @@ function! XVimPopupAccept() abort
     endif
     let l:prefix = s:xvim_popup.prefix
     let l:value = s:xvim_popup.value
-    let l:history = s:xvim_popup.history
     call XVimPopupClose()
 
     if empty(l:value)
         return
     endif
 
-    call histadd(l:history, l:value)
-    try
-        if l:prefix ==# ':'
-            execute l:value
-        else
-            call setreg('/', l:value)
-            call search(l:value, l:prefix ==# '?' ? 'b' : '')
-        endif
-    catch
-        if exists('*XVimShowMessage')
-            call XVimShowMessage(v:exception)
-        endif
-    endtry
-    if exists('*XVimScheduleUiRefresh')
-        call XVimScheduleUiRefresh()
+    " Run it on the native command line (typed, unmapped), so the history
+    " entry, output, errors and prompts are Vim's own and show on the message
+    " row above the status bar; control characters are inserted literally.
+    if exists('*XVimStatusHideForOutput')
+        call XVimStatusHideForOutput()
     endif
-    " Show command/search output immediately instead of waiting on the poll
-    " timer (search failures like "E486: Pattern not found" land here too).
-    if exists('*XVimPollMessagesNow')
-        call XVimPollMessagesNow()
-    endif
+    call feedkeys(l:prefix . substitute(l:value, '[[:cntrl:]]', "\<C-V>&", 'g') . "\<CR>", 'nt')
 endfunction
 
 " Tab-complete the last word of the command line, cycling through matches
@@ -658,6 +656,7 @@ function! XVimPopupOpen(prefix) abort
         call feedkeys(a:prefix, 'n')
         return
     endif
+    call XVimStatusShow()
 
     if exists('s:xvim_heavy_timer') && s:xvim_heavy_timer > 0
         call timer_stop(s:xvim_heavy_timer)
@@ -740,10 +739,10 @@ augroup XVimForceLaststatus
     autocmd VimEnter,BufWinEnter,WinEnter,FileType,VimResized * if &laststatus != 0 | set laststatus=0 | endif
 augroup END
 
-" Vim cannot set cmdheight=0 (E487), so the only way to reclaim the blank
-" row below the statusline is to hide the native statusline (laststatus=0,
-" set above, and re-asserted just above) and paint airline's own text into
-" a popup pinned to the last screen row ourselves. airline#util#stl_disabled()
+" Vim cannot put its statusline below the command line, so the native
+" statusline is hidden (laststatus=0, set above, and re-asserted just above)
+" and airline's own text is painted into a popup pinned to the last screen
+" row (the lower of the two command-line rows) ourselves. airline#util#stl_disabled()
 " only looks at g:airline_disable_statusline (left unset here), so airline
 " keeps building its statusline text in the background even though it is
 " never actually displayed natively -- we just have to turn that %-format
@@ -751,12 +750,32 @@ augroup END
 " read pixels from.
 let s:xvim_heavy_timer = -1
 let s:xvim_ui_refreshing = 0
+let s:xvim_ui_cleared = 0
 let s:xvim_status_popup = -1
 " Signature (text+highlight-group per segment) of what is currently
 " painted into the popup, used to skip redundant popup_settext()/prop_add()
 " calls when nothing actually changed.
 let s:xvim_status_text = ''
 let s:xvim_status_timer = -1
+" Output of a command run from the command popup may need more than the row
+" above the status bar (:ls prints below the typed command line), so the
+" status bar is hidden meanwhile: 1 while the command runs, 2 once it is done
+" (SafeState); the next cursor move or mode change shows it again.
+let s:xvim_status_hidden = 0
+
+function! XVimStatusHideForOutput() abort
+    if s:xvim_status_popup > 0
+        call popup_hide(s:xvim_status_popup)
+        let s:xvim_status_hidden = 1
+    endif
+endfunction
+
+function! XVimStatusShow() abort
+    if s:xvim_status_hidden
+        let s:xvim_status_hidden = 0
+        call popup_show(s:xvim_status_popup)
+    endif
+endfunction
 " Cache of text-property types created to mirror airline's own highlight
 " groups (see XVimEnsureHlProp()), keyed by group name.
 let s:xvim_hl_props = {}
@@ -963,7 +982,11 @@ function! XVimRenderStatusPopup() abort
         return
     endif
     call XVimStatusPopupEnsure()
-    call popup_move(s:xvim_status_popup, {'line': &lines, 'col': 1, 'minwidth': &columns, 'maxwidth': &columns})
+    " popup_move() wipes the message row above, so only move on a resize
+    let l:pos = popup_getpos(s:xvim_status_popup)
+    if l:pos.line != &lines || l:pos.col != 1 || l:pos.width != &columns
+        call popup_move(s:xvim_status_popup, {'line': &lines, 'col': 1, 'minwidth': &columns, 'maxwidth': &columns})
+    endif
     let l:segments = XVimBuildStatusSegments(&columns)
     let l:sig = join(map(copy(l:segments), 'v:val.text . "\x01" . v:val.group'), "\x02")
     if l:sig ==# s:xvim_status_text
@@ -1002,9 +1025,10 @@ endfunction
 " text, no full redraw!, so it is safe to call from CursorMoved/ModeChanged
 " without risking the redraw storms/flicker seen previously.
 function! XVimScheduleStatusUpdate() abort
-    if !empty(s:xvim_popup) || !exists('*popup_create')
+    if !empty(s:xvim_popup) || !exists('*popup_create') || s:xvim_status_hidden == 1
         return
     endif
+    call XVimStatusShow()
     if !exists('*timer_start')
         call XVimRenderStatusPopup()
         return
@@ -1027,7 +1051,14 @@ function! XVimRefreshUi() abort
         catch
         endtry
     endif
-    redraw!
+    " clear the screen once at startup (stray terminal query replies); later
+    " refreshes keep the message row
+    if s:xvim_ui_cleared
+        redraw
+    else
+        redraw!
+        let s:xvim_ui_cleared = 1
+    endif
     silent! redrawstatus
     call XVimRenderStatusPopup()
     let s:xvim_ui_refreshing = 0
@@ -1049,120 +1080,6 @@ function! XVimScheduleUiRefresh() abort
     let s:xvim_heavy_timer = timer_start(0, function('XVimRunHeavyRefresh'))
 endfunction
 
-" |------------------- noice-style message popup ------------------------|
-" Route log/error output into a popup above the status bar instead of the
-" command line. Vim has no message-filter hook, so this polls `:messages`
-" (bounded to the single most-recent entry, so cost never grows with
-" history size) on a light timer and whenever we run a command ourselves.
-let s:xvim_msg_popup = -1
-let s:xvim_msg_last = ''
-let s:xvim_msg_poll_timer = -1
-let s:xvim_msg_hide_timer = -1
-
-function! XVimLatestMessage() abort
-    let l:out = ''
-    try
-        redir => l:out
-        silent! 1messages
-        redir END
-    catch
-        silent! redir END
-    endtry
-    let l:lines = split(l:out, "\n")
-    while !empty(l:lines) && trim(l:lines[-1]) ==# ''
-        call remove(l:lines, -1)
-    endwhile
-    return join(l:lines, "\n")
-endfunction
-
-function! XVimMsgPopupHide() abort
-    if s:xvim_msg_popup > 0 && exists('*popup_close')
-        silent! call popup_close(s:xvim_msg_popup)
-    endif
-    let s:xvim_msg_popup = -1
-    if s:xvim_msg_hide_timer > 0
-        call timer_stop(s:xvim_msg_hide_timer)
-        let s:xvim_msg_hide_timer = -1
-    endif
-endfunction
-
-function! XVimMsgPopupAutoHide(timer) abort
-    let s:xvim_msg_hide_timer = -1
-    call XVimMsgPopupHide()
-endfunction
-
-function! XVimShowMessage(text) abort
-    if !exists('*popup_create') || trim(a:text) ==# ''
-        return
-    endif
-    let l:width = max([20, &columns - 4])
-    let l:lines = split(a:text, "\n")
-    if len(l:lines) > 6
-        let l:lines = l:lines[-6:]
-    endif
-    let l:opts = {
-        \ 'line': max([1, &lines - 1 - len(l:lines)]),
-        \ 'col': max([1, (&columns - l:width) / 2 + 1]),
-        \ 'minwidth': l:width,
-        \ 'maxwidth': l:width,
-        \ 'minheight': len(l:lines),
-        \ 'maxheight': len(l:lines),
-        \ 'padding': [0, 1, 0, 1],
-        \ 'border': [1, 1, 1, 1],
-        \ 'borderchars': ['─', '│', '─', '│', '╭', '╮', '╯', '╰'],
-        \ 'borderhighlight': ['FloatBorder'],
-        \ 'title': ' MESSAGE ',
-        \ 'titlehighlight': 'FloatTitle',
-        \ 'highlight': 'Normal',
-        \ 'mapping': 0,
-        \ 'cursorline': 0,
-        \ 'wrap': 1,
-        \ 'zindex': 190,
-        \ }
-    if s:xvim_msg_popup > 0 && !empty(popup_getpos(s:xvim_msg_popup))
-        call popup_settext(s:xvim_msg_popup, l:lines)
-        call popup_move(s:xvim_msg_popup, l:opts)
-    else
-        let s:xvim_msg_popup = popup_create(l:lines, l:opts)
-    endif
-    if s:xvim_msg_hide_timer > 0
-        call timer_stop(s:xvim_msg_hide_timer)
-    endif
-    let s:xvim_msg_hide_timer = timer_start(4000, function('XVimMsgPopupAutoHide'))
-endfunction
-
-function! XVimPollMessagesNow() abort
-    let l:current = XVimLatestMessage()
-    if l:current !=# s:xvim_msg_last
-        let s:xvim_msg_last = l:current
-        if l:current !=# ''
-            call XVimShowMessage(l:current)
-        endif
-    endif
-endfunction
-
-function! XVimPollMessagesTimer(timer) abort
-    let s:xvim_msg_poll_timer = -1
-    call XVimPollMessagesNow()
-    call XVimScheduleMsgPoll()
-endfunction
-
-function! XVimScheduleMsgPoll() abort
-    if !exists('*timer_start') || !exists('*popup_create')
-        return
-    endif
-    let s:xvim_msg_poll_timer = timer_start(200, function('XVimPollMessagesTimer'))
-endfunction
-
-" Prime the "last seen" message on startup so whatever plugins printed
-" during load is not immediately flashed as a new message once polling
-" begins.
-function! XVimPrimeMessages() abort
-    let s:xvim_msg_last = XVimLatestMessage()
-    call XVimScheduleMsgPoll()
-endfunction
-" |------------------------------------------------------------------------|
-
 function! XVimStopUiTimers() abort
     if s:xvim_heavy_timer > 0
         call timer_stop(s:xvim_heavy_timer)
@@ -1172,25 +1089,20 @@ function! XVimStopUiTimers() abort
         call timer_stop(s:xvim_status_timer)
         let s:xvim_status_timer = -1
     endif
-    if s:xvim_msg_poll_timer > 0
-        call timer_stop(s:xvim_msg_poll_timer)
-        let s:xvim_msg_poll_timer = -1
-    endif
     if !empty(s:xvim_popup) && exists('*popup_close')
         silent! call popup_close(s:xvim_popup.id)
     endif
     if s:xvim_status_popup > 0 && exists('*popup_close')
         silent! call popup_close(s:xvim_status_popup)
     endif
-    call XVimMsgPopupHide()
     call XVimPopupMenuHide()
 endfunction
 
 augroup XVimUiRefresh
     autocmd!
-    autocmd VimEnter * call XVimPrimeMessages()
     autocmd VimEnter,BufWinEnter,WinEnter,VimResized * call XVimScheduleUiRefresh()
     autocmd CursorMoved,CursorMovedI,ModeChanged,InsertEnter,InsertLeave * call XVimScheduleStatusUpdate()
+    autocmd SafeState * if s:xvim_status_hidden == 1 | let s:xvim_status_hidden = 2 | endif
     autocmd VimLeavePre * call XVimStopUiTimers()
 augroup END
 
@@ -1228,6 +1140,100 @@ set timeout timeoutlen=1000 ttimeoutlen=10
 noremap <SPACE> <Nop>
 let mapleader = " "
 let maplocalleader = " "
+
+" <Space> opens a which-key menu of the leader mappings below right away; it
+" stays open after running one (hydra mode) until <Esc>. The groups mirror
+" nvim's (LazyVim) and the menu lives in ~/.vim/autoload/xwhichkey.vim.
+let s:xwhichkey = !empty(globpath(&runtimepath, 'autoload/xwhichkey.vim'))
+    \ && exists('*popup_create') && exists('*maplist')
+
+function! s:Leader(lhs, rhs, desc) abort
+    if s:xwhichkey
+        call xwhichkey#map('n', '<leader>' . a:lhs, a:rhs, a:desc)
+    else
+        execute 'nnoremap <silent> <leader>' . a:lhs . ' ' . a:rhs
+    endif
+endfunction
+
+" delete the current buffer but keep its window (it shows another buffer)
+function! XVimBufDelete() abort
+    let l:buf = bufnr('%')
+    if !&modified
+        if buflisted(bufnr('#')) && bufnr('#') != l:buf
+            buffer #
+        else
+            bnext
+        endif
+        if bufnr('%') == l:buf
+            enew
+        endif
+    endif
+    " a modified buffer is left to :bdelete, which reports E89
+    execute 'bdelete' l:buf
+endfunction
+
+function! XVimBufDeleteOthers() abort
+    for l:info in getbufinfo({'buflisted': 1})
+        if l:info.bufnr != bufnr('%') && !l:info.changed
+            execute 'bdelete' l:info.bufnr
+        endif
+    endfor
+endfunction
+
+call s:Leader('-', '<C-W>s', 'Split Window Below')
+call s:Leader('<Bar>', '<C-W>v', 'Split Window Right')
+call s:Leader('`', '<C-^>', 'Switch to Other Buffer')
+call s:Leader('K', 'K', 'Keywordprg')
+call s:Leader('l', '<Cmd>PlugStatus<CR>', 'Plugins (vim-plug)')
+
+call s:Leader('<Tab><Tab>', '<Cmd>tabnew<CR>', 'New Tab')
+call s:Leader('<Tab>]', '<Cmd>tabnext<CR>', 'Next Tab')
+call s:Leader('<Tab>[', '<Cmd>tabprevious<CR>', 'Previous Tab')
+call s:Leader('<Tab>d', '<Cmd>tabclose<CR>', 'Close Tab')
+call s:Leader('<Tab>f', '<Cmd>tabfirst<CR>', 'First Tab')
+call s:Leader('<Tab>l', '<Cmd>tablast<CR>', 'Last Tab')
+call s:Leader('<Tab>o', '<Cmd>tabonly<CR>', 'Close Other Tabs')
+
+call s:Leader('bb', '<C-^>', 'Switch to Other Buffer')
+call s:Leader('bd', '<Cmd>call XVimBufDelete()<CR>', 'Delete Buffer')
+call s:Leader('bD', '<Cmd>bdelete<CR>', 'Delete Buffer and Window')
+call s:Leader('bo', '<Cmd>call XVimBufDeleteOthers()<CR>', 'Delete Other Buffers')
+
+call s:Leader('fn', '<Cmd>enew<CR>', 'New File')
+call s:Leader('ft', '<Cmd>botright terminal<CR>', 'Terminal')
+
+call s:Leader('qq', '<Cmd>qa<CR>', 'Quit All')
+
+call s:Leader('uw', '<Cmd>setlocal wrap! wrap?<CR>', 'Toggle Wrap')
+call s:Leader('ul', '<Cmd>setlocal number! number?<CR>', 'Toggle Line Numbers')
+call s:Leader('uL', '<Cmd>setlocal relativenumber! relativenumber?<CR>', 'Toggle Relative Number')
+call s:Leader('us', '<Cmd>setlocal spell! spell?<CR>', 'Toggle Spelling')
+call s:Leader('uc', '<Cmd>let &l:conceallevel = &l:conceallevel ? 0 : 2<Bar>setlocal conceallevel?<CR>', 'Toggle Conceal Level')
+call s:Leader('ub', '<Cmd>let &background = &background ==# "dark" ? "light" : "dark"<CR>', 'Toggle Dark Background')
+call s:Leader('uh', '<Cmd>set hlsearch! hlsearch?<CR>', 'Toggle Search Highlight')
+call s:Leader('ur', '<Cmd>nohlsearch<Bar>diffupdate<Bar>redraw!<CR>', 'Redraw / Clear hlsearch / Diff Update')
+call s:Leader('ui', '<Cmd>echo join(map(synstack(line("."), col(".")), "synIDattr(v:val, ''name'')"), " > ")<CR>', 'Inspect Pos')
+
+call s:Leader('wd', '<C-W>c', 'Delete Window')
+call s:Leader('wo', '<C-W>o', 'Close Other Windows')
+call s:Leader('ww', '<C-W>p', 'Other Window')
+call s:Leader('w=', '<C-W>=', 'Equalize Windows')
+
+call s:Leader('xl', '<Cmd>lopen<CR>', 'Location List')
+call s:Leader('xq', '<Cmd>copen<CR>', 'Quickfix List')
+
+if s:xwhichkey
+    call xwhichkey#map('n', '<leader>?', "<Cmd>call xwhichkey#open('n', '', {'buffer': 1, 'title': 'Buffer Keymaps'})<CR>", 'Buffer Keymaps (which-key)')
+    call xwhichkey#group('n', '<leader><Tab>', 'tabs')
+    call xwhichkey#group('n', '<leader>b', 'buffer')
+    call xwhichkey#group('n', '<leader>c', 'code')
+    call xwhichkey#group('n', '<leader>f', 'file/find')
+    call xwhichkey#group('n', '<leader>q', 'quit')
+    call xwhichkey#group('n', '<leader>u', 'ui')
+    call xwhichkey#group('n', '<leader>w', 'windows')
+    call xwhichkey#group('n', '<leader>x', 'diagnostics/quickfix')
+    nnoremap <silent> <nowait> <Space> <Cmd>call xwhichkey#open('n', '<leader>')<CR>
+endif
 
 " <ESC> (terminal mode)             to return to normal mode
 tnoremap <Esc> <C-\><C-n>
