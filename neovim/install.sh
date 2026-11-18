@@ -69,7 +69,8 @@ function neovim_install_deps() {
     return 0
 }
 
-# copies the neovim configs (and links nvimpager onto PATH) into the target home; as_root=1 uses sudo
+# copies the neovim configs into the target home (as_root=1 uses sudo), links nvimpager onto PATH
+# and installs the nvimgit shim (neovim/bin/nvimgit) there
 function neovim_configure_home() {
     local target_home="$1" as_root="${2:-0}"
     local app link_as_root=0
@@ -83,6 +84,9 @@ function neovim_configure_home() {
     [[ "$RESOLVED_INSTALL_MODE" == system && $EUID != 0 ]] && link_as_root=1
     if app_selected nvimpager && ! app_pkg_via_flatpak nvimpager; then
         link_path "$link_as_root" /usr/bin/nvimpager "$(scoped_bin_dir)/nvimpager"
+    fi
+    if app_selected nvimgit; then
+        install_file "$link_as_root" "$NEOVIM_INSTALL_DIR/bin/nvimgit" "$(scoped_bin_dir)/nvimgit"
     fi
     return 0
 }
@@ -103,7 +107,7 @@ function neovim_clean_home() {
 
 function neovim_configure_global() {
     if app_selected nvim; then
-        install_file 1 "$NEOVIM_INSTALL_DIR/nvim/init.lua" /usr/share/nvim/sysinit.lua -f
+        install_file 1 "$NEOVIM_INSTALL_DIR/nvim/init.lua" /usr/share/nvim/sysinit.lua
     fi
 
     if app_selected nvimgit; then

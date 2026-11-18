@@ -1,0 +1,3 @@
+#!/bin/sh
+# nvim with the nvimgit config (~/.config/nvimgit); installed onto PATH by neovim/install.sh
+NVIM_APPNAME=nvimgit exec nvim "$@"
